@@ -13,11 +13,11 @@ interface Transaction {
     date: string;
 }
 
-interface DashboardSummary {
+interface DashboardCompliance {
     totalIncome: number;
     totalExpenses: number;
     net: number;
-    categories: { category: string; totalSpent: number; budgetLimit: number | null; remaining: number | null }[];
+    // rules: ... we don't strictly need rules here for the card view, just totals
 }
 
 function fmt(n: number): string {
@@ -30,7 +30,7 @@ function fmtDate(iso: string): string {
 
 export default function CardsPage() {
     const { username } = useAuth();
-    const [dashboard, setDashboard] = useState<DashboardSummary | null>(null);
+    const [dashboard, setDashboard] = useState<DashboardCompliance | null>(null);
     const [transactions, setTransactions] = useState<Transaction[]>([]);
     const [loading, setLoading] = useState(true);
 
@@ -38,7 +38,7 @@ export default function CardsPage() {
         if (!username) return;
         try {
             const [dash, txs] = await Promise.all([
-                apiFetch<DashboardSummary>('/budgets/dashboard', {}, username),
+                apiFetch<DashboardCompliance>('/budgets/compliance', {}, username),
                 apiFetch<Transaction[]>('/transactions', {}, username),
             ]);
             setDashboard(dash);
@@ -55,8 +55,17 @@ export default function CardsPage() {
     const totalExpenses = dashboard?.totalExpenses ?? 0;
     const recentExpenses = transactions.filter(t => t.transactionType === 'expense').slice(0, 5);
 
-    // Build category bar chart data
-    const catData = dashboard?.categories ?? [];
+    // Build category bar chart data from transactions
+    const catData = Object.entries(
+        transactions
+            .filter(t => t.transactionType === 'expense')
+            .reduce((acc, t) => {
+                acc[t.category] = (acc[t.category] || 0) + (+t.amount);
+                return acc;
+            }, {} as Record<string, number>)
+    ).map(([category, totalSpent]) => ({ category, totalSpent }))
+        .sort((a, b) => b.totalSpent - a.totalSpent);
+
     const maxCatSpent = Math.max(...catData.map(c => c.totalSpent), 1);
 
     if (loading) {
@@ -163,8 +172,8 @@ export default function CardsPage() {
                                     const pct = Math.max((cat.totalSpent / maxCatSpent) * 100, 5);
                                     const isLast = i === catData.length - 1;
                                     return (
-                                        <div key={cat.category} className="flex flex-col items-center flex-1 gap-1 group" title={`${cat.category}: ${fmt(cat.totalSpent)}`}>
-                                            <span className="text-[9px] text-slate-500 font-mono opacity-0 group-hover:opacity-100 transition-opacity">{fmt(cat.totalSpent)}</span>
+                                        <div key={cat.category} className="flex flex-col items-center justify-end h-full flex-1 gap-1 group" title={`${cat.category}: ${fmt(cat.totalSpent)}`}>
+                                            <span className="text-[9px] text-slate-500 font-mono opacity-0 group-hover:opacity-100 transition-opacity mb-auto">{fmt(cat.totalSpent)}</span>
                                             <div
                                                 className={`w-full rounded-t-sm transition-all ${isLast ? 'bg-primary/60 hover:bg-primary shadow-[0_0_15px_rgba(37,99,235,0.4)]' : 'bg-primary/20 hover:bg-primary/40'}`}
                                                 style={{ height: `${pct}%` }}

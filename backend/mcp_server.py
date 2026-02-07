@@ -8,11 +8,14 @@ from database import get_supabase
 from models import (
     TransactionType,
     TransactionCreate,
-    BudgetCategoryCreate,
     RuleType,
     BudgetRuleCreate,
+    AuthorizationStatus,
+    AgentSettingsCreate,
+    AgentSettingsUpdate,
+    AuthorizationLogCreate,
 )
-from services import transaction_service, budget_service, budget_rule_service
+from services import transaction_service, budget_rule_service, agent_guard_service
 
 # Initialize FastMCP server
 mcp = FastMCP("Veto Budget Agent")
@@ -48,6 +51,7 @@ def add_transaction(
             return f"Error: Invalid transaction type '{transaction_type}'. Must be 'expense' or 'income'."
 
         supabase = get_supabase()
+        user_id = agent_guard_service.get_or_create_user_id(supabase, username)
         tx_data = TransactionCreate(
             amount=amount,
             description=description,
@@ -55,7 +59,7 @@ def add_transaction(
             transaction_type=type_enum,
             date=date
         )
-        result = transaction_service.add_transaction(supabase, username, tx_data)
+        result = transaction_service.add_transaction(supabase, user_id, tx_data)
         return f"Transaction added: {result.description} ({result.amount}) - ID: {result.id}"
     except Exception as e:
         return f"Error adding transaction: {str(e)}"
@@ -65,7 +69,8 @@ def delete_transaction(transaction_id: str, username: str = "default_user") -> s
     """Delete a transaction by its ID."""
     try:
         supabase = get_supabase()
-        success = transaction_service.delete_transaction(supabase, username, transaction_id)
+        user_id = agent_guard_service.get_or_create_user_id(supabase, username)
+        success = transaction_service.delete_transaction(supabase, user_id, transaction_id)
         if success:
             return f"Transaction {transaction_id} deleted successfully."
         else:
@@ -90,9 +95,10 @@ def get_transactions(
                 return f"Error: Invalid transaction type '{transaction_type}'."
 
         supabase = get_supabase()
+        user_id = agent_guard_service.get_or_create_user_id(supabase, username)
         txs = transaction_service.get_transactions(
             supabase,
-            username,
+            user_id,
             category=category,
             transaction_type=type_enum
         )
@@ -111,58 +117,31 @@ def get_transactions(
     except Exception as e:
         return f"Error fetching transactions: {str(e)}"
 
-@mcp.tool()
-def create_budget_category(
-    name: str,
-    monthly_limit: float,
-    username: str = "default_user"
-) -> str:
-    """Create a new budget category with a monthly spending limit."""
-    try:
-        supabase = get_supabase()
-        cat_data = BudgetCategoryCreate(name=name, monthly_limit=monthly_limit)
-        result = budget_service.create_category(supabase, username, cat_data)
-        return f"Category '{result.name}' created with limit ${result.monthly_limit}."
-    except Exception as e:
-        return f"Error creating category: {str(e)}"
 
-@mcp.tool()
-def get_budget_categories(username: str = "default_user") -> str:
-    """List all budget categories and their limits."""
-    try:
-        supabase = get_supabase()
-        cats = budget_service.get_categories(supabase, username)
-        if not cats:
-            return "No categories set."
-
-        output = ["Budget Categories:"]
-        for c in cats:
-            output.append(f"- {c.name}: ${c.monthly_limit}/month")
-        return "\n".join(output)
-    except Exception as e:
-        return f"Error fetching categories: {str(e)}"
 
 @mcp.tool()
 def get_dashboard_summary(username: str = "default_user") -> str:
-    """Get a financial dashboard summary including income, expenses, and category breakdowns."""
+    """Get a financial dashboard summary including income, expenses, and rule compliance."""
     try:
         supabase = get_supabase()
-        summary = budget_service.get_dashboard_summary(supabase, username)
-
+        user_id = agent_guard_service.get_or_create_user_id(supabase, username)
+        compliance = budget_rule_service.check_rule_compliance(supabase, user_id)
+ 
         lines = [
             "**Dashboard Summary**",
-            f"Total Income: ${summary.total_income:.2f}",
-            f"Total Expenses: ${summary.total_expenses:.2f}",
-            f"Net: ${summary.net:.2f}",
+            f"Total Income: ${compliance['total_income']:.2f}",
+            f"Total Expenses: ${compliance['total_expenses']:.2f}",
+            f"Net: ${compliance['net']:.2f}",
             "",
-            "**Category Breakdown:**"
+            "**Budget Rules Status:**"
         ]
-
-        for cat in summary.categories:
-            limit_str = f" / ${cat.budget_limit}" if cat.budget_limit else ""
-            remaining_str = f" (Remaining: ${cat.remaining:.2f})" if cat.remaining is not None else ""
-            lines.append(f"- {cat.category}: ${cat.total_spent:.2f}{limit_str}{remaining_str}")
-
+ 
+        for rule in compliance['rules']:
+            status = "COMPLIANT" if rule.get("compliant") else "AT RISK/NON-COMPLIANT"
+            lines.append(f"- {rule.get('rule_name')} ({rule.get('rule_type')}): {status}")
+            if rule.get("message"):
+                lines.append(f"  Note: {rule.get('message')}")
+ 
         return "\n".join(lines)
     except Exception as e:
         return f"Error fetching dashboard: {str(e)}"
@@ -203,12 +182,39 @@ def create_budget_rule(
             return "Error: config must be a valid JSON string."
 
         supabase = get_supabase()
+        user_id = agent_guard_service.get_or_create_user_id(supabase, username)
+
+        # Special handling for 50/30/20 split
+        if type_enum == RuleType.percentage_allocation and "50/30/20" in config:
+            # Create 3 separate rules
+            rules_created = []
+
+            # 1. Needs
+            r1 = BudgetRuleCreate(rule_type=RuleType.percentage_needs, name="Needs Limit (50%)", config=json.dumps({"percent": 50}))
+            res1 = budget_rule_service.create_rule(supabase, user_id, r1)
+            rules_created.append(res1.name)
+
+            # 2. Wants
+            r2 = BudgetRuleCreate(rule_type=RuleType.percentage_wants, name="Wants Limit (30%)", config=json.dumps({"percent": 30}))
+            res2 = budget_rule_service.create_rule(supabase, user_id, r2)
+            rules_created.append(res2.name)
+
+            # 3. Savings (using generic percentage_allocation or specific? Let's use percentage_allocation as "Savings" for now to match compliance logic default)
+            # Actually, I added percentage_savings logic? No, check_rule_compliance still uses percentage_allocation for savings.
+            # Let's verify what I did in budget_rule_service.
+            # I kept "elif rule_type == RuleType.percentage_allocation.value:" for savings logic.
+            r3 = BudgetRuleCreate(rule_type=RuleType.percentage_allocation, name="Savings Goal (20%)", config=json.dumps({"savings": 20}))
+            res3 = budget_rule_service.create_rule(supabase, user_id, r3)
+            rules_created.append(res3.name)
+
+            return f"Created 3 budget rules: {', '.join(rules_created)}"
+
         rule_data = BudgetRuleCreate(
             rule_type=type_enum,
             name=name,
             config=config
         )
-        result = budget_rule_service.create_rule(supabase, username, rule_data)
+        result = budget_rule_service.create_rule(supabase, user_id, rule_data)
         return f"Budget rule '{result.name}' created successfully (ID: {result.id})."
     except Exception as e:
         return f"Error creating budget rule: {str(e)}"
@@ -218,14 +224,20 @@ def get_budget_rules(username: str = "default_user") -> str:
     """List all active budget rules for a user."""
     try:
         supabase = get_supabase()
-        rules = budget_rule_service.get_rules(supabase, username)
+        user_id = agent_guard_service.get_or_create_user_id(supabase, username)
+        output = []
+
+        # Get explicit budget rules
+        rules = budget_rule_service.get_rules(supabase, user_id)
+        if rules:
+            output.append("**Budget Rules:**")
+            for r in rules:
+                output.append(f"- [{r.rule_type.value}] {r.name} (ID: {r.id})")
+                output.append(f"  Config: {r.config}")
+        
         if not rules:
             return "No budget rules set."
 
-        output = ["Active Budget Rules:"]
-        for r in rules:
-            output.append(f"- [{r.rule_type.value}] {r.name} (ID: {r.id})")
-            output.append(f"  Config: {r.config}")
         return "\n".join(output)
     except Exception as e:
         return f"Error fetching budget rules: {str(e)}"
@@ -235,7 +247,8 @@ def delete_budget_rule(rule_id: str, username: str = "default_user") -> str:
     """Delete a budget rule by its ID."""
     try:
         supabase = get_supabase()
-        success = budget_rule_service.delete_rule(supabase, username, rule_id)
+        user_id = agent_guard_service.get_or_create_user_id(supabase, username)
+        success = budget_rule_service.delete_rule(supabase, user_id, rule_id)
         if success:
             return f"Budget rule {rule_id} deleted successfully."
         else:
@@ -251,7 +264,8 @@ def check_rule_compliance(username: str = "default_user") -> str:
     """
     try:
         supabase = get_supabase()
-        result = budget_rule_service.check_rule_compliance(supabase, username)
+        user_id = agent_guard_service.get_or_create_user_id(supabase, username)
+        result = budget_rule_service.check_rule_compliance(supabase, user_id)
 
         if result.get("status") == "no_rules":
             return result.get("message", "No active budget rules found.")
@@ -287,13 +301,16 @@ def get_spending_insights(username: str = "default_user") -> str:
     """
     try:
         supabase = get_supabase()
-        summary = budget_service.get_dashboard_summary(supabase, username)
+        user_id = agent_guard_service.get_or_create_user_id(supabase, username)
+        compliance = budget_rule_service.check_rule_compliance(supabase, user_id)
+        total_income = compliance["total_income"]
+        total_expenses = compliance["total_expenses"]
 
         insights = []
 
         # Overall health
-        if summary.total_income > 0:
-            savings_rate = ((summary.total_income - summary.total_expenses) / summary.total_income) * 100
+        if total_income > 0:
+            savings_rate = ((total_income - total_expenses) / total_income) * 100
             if savings_rate >= 20:
                 insights.append(f"Great savings rate of {savings_rate:.1f}%!")
             elif savings_rate >= 10:
@@ -305,19 +322,15 @@ def get_spending_insights(username: str = "default_user") -> str:
         else:
             insights.append("No income recorded yet.")
 
-        # Category analysis
-        if summary.categories:
-            # Find categories over budget
-            over_budget = [c for c in summary.categories if c.remaining is not None and c.remaining < 0]
-            if over_budget:
-                for c in over_budget:
-                    insights.append(f"{c.category} is ${abs(c.remaining):.2f} over budget!")
+        # Rule analysis
+        rules = compliance.get("rules", [])
+        if rules:
+            # Find rules that are non-compliant
+            non_compliant = [r for r in rules if r.get("compliant") is False]
+            if non_compliant:
+                for r in non_compliant:
+                    insights.append(f"Rule '{r.get('rule_name')}' is broken: {r.get('message', 'Check rule details.')}")
 
-            # Find top spending category
-            if summary.categories:
-                top_cat = max(summary.categories, key=lambda x: x.total_spent)
-                if top_cat.total_spent > 0:
-                    insights.append(f"Highest spending: {top_cat.category} (${top_cat.total_spent:.2f})")
 
         if not insights:
             return "No spending data available yet."
@@ -591,6 +604,635 @@ def project_monthly_spending(
             result["recommended_daily_limit"] = round(max(0, safe_daily), 2)
 
     return json.dumps(result, indent=2)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AGENT GUARD RAILS — Tools for autonomous agents to check budget compliance
+# These are advisory tools that external agents should call BEFORE making purchases
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def authorize_purchase(
+    username: str,
+    amount: float,
+    category: str,
+    merchant: Optional[str] = None,
+    description: Optional[str] = None,
+    agent_id: Optional[str] = None,
+) -> str:
+    """
+    Check if a purchase is authorized within the user's budget.
+    
+    AGENT GUARD RAIL — This is an advisory tool. External agents SHOULD call this
+    before making any purchase on behalf of a user. The tool checks:
+    1. Category budget limits
+    2. Overall monthly budget
+    3. Risk factors
+    
+    Returns a recommendation: APPROVED, DENIED, CAUTION, or REQUIRES_HUMAN_APPROVAL.
+    
+    Args:
+        username: The user's identifier (required).
+        amount: The purchase amount in dollars.
+        category: The spending category (e.g., "Food", "Entertainment").
+        merchant: Optional merchant name for context.
+        description: Optional description of the purchase.
+        agent_id: Optional identifier for the requesting agent.
+    
+    Returns:
+        JSON with authorization status, reason, and remaining budgets.
+    """
+    from uuid import uuid4
+
+    try:
+        supabase = get_supabase()
+        user_id = agent_guard_service.get_or_create_user_id(supabase, username)
+
+        # Get user's budget compliance status
+        compliance = budget_rule_service.check_rule_compliance(supabase, user_id)
+        net_balance = compliance["net"]
+        
+        # Find if there is a category limit rule for this category
+        category_rule = None
+        for rule in compliance["rules"]:
+            if rule.get("rule_type") == "category_limit" and rule.get("category", "").lower() == category.lower():
+                category_rule = rule
+                break
+        
+        # Default agent spending limits (can be made configurable later)
+        default_limits = {
+            "single_transaction_limit": 50.0,
+            "daily_limit": 100.0,
+            "require_approval_above": 100.0,
+        }
+        
+        authorization_token = uuid4().hex
+        
+        result = {
+            "authorization_token": authorization_token,
+            "username": username,
+            "amount": amount,
+            "category": category,
+            "merchant": merchant,
+            "agent_id": agent_id,
+            "timestamp": datetime.now().isoformat(),
+        }
+        
+        # Check 1: Single transaction limit
+        if amount > default_limits["single_transaction_limit"]:
+            result["status"] = "REQUIRES_HUMAN_APPROVAL"
+            result["reason"] = f"Purchase of ${amount:.2f} exceeds the agent single-transaction limit of ${default_limits['single_transaction_limit']:.2f}. Human approval required."
+            result["budget_remaining"] = net_balance
+            return json.dumps(result, indent=2)
+        
+        # Check 2: Category budget (if exists)
+        if category_rule:
+            limit = category_rule.get("limit", 0)
+            spent = category_rule.get("spent", 0)
+            remaining = start_remaining = limit - spent
+            
+            # If already over budget, remainng is negative.
+            # If remaining is positive, we check if purchase fits.
+            
+            if amount > remaining:
+                result["status"] = "DENIED"
+                result["reason"] = f"Purchase of ${amount:.2f} would exceed your {category} budget. Only ${remaining:.2f} remaining."
+                result["category_remaining"] = remaining
+                result["budget_remaining"] = net_balance
+                return json.dumps(result, indent=2)
+            elif remaining - amount < (limit * 0.1):
+                result["status"] = "CAUTION"
+                result["reason"] = f"Purchase is within budget, but would leave only ${remaining - amount:.2f} in {category}. Proceed with caution."
+                result["category_remaining"] = remaining - amount
+                result["budget_remaining"] = net_balance
+                return json.dumps(result, indent=2)
+            else:
+                result["category_remaining"] = remaining - amount
+        
+        # Check 3: Overall budget health
+        if net_balance < 0:
+            result["status"] = "CAUTION"
+            result["reason"] = f"Your overall budget is in deficit (${net_balance:.2f}). Consider this purchase carefully."
+            result["budget_remaining"] = net_balance
+            return json.dumps(result, indent=2)
+        
+        # All checks passed
+        result["status"] = "APPROVED"
+        result["reason"] = f"Purchase of ${amount:.2f} in {category} is within budget."
+        result["budget_remaining"] = net_balance - amount
+        
+        return json.dumps(result, indent=2)
+        
+    except Exception as e:
+        return json.dumps({
+            "status": "ERROR",
+            "reason": f"Unable to verify budget: {str(e)}",
+            "authorization_token": None
+        }, indent=2)
+
+
+@mcp.tool()
+def get_agent_spending_limits(username: str = "default_user") -> str:
+    """
+    Get the spending limits configured for autonomous agents.
+    
+    AGENT GUARD RAIL — Agents should call this to understand what limits apply
+    before attempting purchases on behalf of the user.
+    
+    Args:
+        username: The user's identifier.
+    
+    Returns:
+        JSON with daily, weekly, monthly, and per-transaction limits.
+    """
+    # Default limits (can be made user-configurable with database later)
+    limits = {
+        "username": username,
+        "single_transaction_limit": 50.0,
+        "daily_limit": 100.0,
+        "weekly_limit": 500.0,
+        "monthly_limit": 2000.0,
+        "require_approval_above": 100.0,
+        "allowed_categories": None,  # None = all allowed
+        "blocked_categories": [],
+        "note": "These are default limits. User-configurable limits will be available in a future update."
+    }
+    return json.dumps(limits, indent=2)
+
+
+@mcp.tool()
+def assess_purchase_risk(
+    amount: float,
+    category: str,
+    monthly_income: float = 0.0,
+    monthly_expenses: float = 0.0,
+    is_recurring: bool = False,
+    is_essential: bool = False,
+) -> str:
+    """
+    Assess the risk level of a proposed purchase.
+    
+    AGENT GUARD RAIL — Returns a risk score (0-100) and risk level to help agents
+    make informed decisions about purchases.
+    
+    Args:
+        amount: The purchase amount.
+        category: The spending category.
+        monthly_income: User's monthly income (for context).
+        monthly_expenses: User's current monthly expenses (for context).
+        is_recurring: Whether this is a recurring purchase.
+        is_essential: Whether this is an essential purchase (needs vs wants).
+    
+    Returns:
+        JSON with risk_score (0-100), risk_level, and risk_factors.
+    """
+    risk_score = 0
+    risk_factors = []
+    
+    # Factor 1: Amount relative to income (0-30 points)
+    if monthly_income > 0:
+        income_ratio = amount / monthly_income
+        if income_ratio > 0.25:
+            risk_score += 30
+            risk_factors.append(f"Purchase is {income_ratio*100:.1f}% of monthly income (very high)")
+        elif income_ratio > 0.10:
+            risk_score += 20
+            risk_factors.append(f"Purchase is {income_ratio*100:.1f}% of monthly income (high)")
+        elif income_ratio > 0.05:
+            risk_score += 10
+            risk_factors.append(f"Purchase is {income_ratio*100:.1f}% of monthly income (moderate)")
+    else:
+        risk_score += 15
+        risk_factors.append("No income data available for context")
+    
+    # Factor 2: Expense vs income ratio (0-25 points)
+    if monthly_income > 0 and monthly_expenses > 0:
+        expense_ratio = (monthly_expenses + amount) / monthly_income
+        if expense_ratio > 1.0:
+            risk_score += 25
+            risk_factors.append("Would push total expenses above income")
+        elif expense_ratio > 0.9:
+            risk_score += 15
+            risk_factors.append("Would push expenses to 90%+ of income")
+        elif expense_ratio > 0.8:
+            risk_score += 5
+            risk_factors.append("Expenses would be 80-90% of income")
+    
+    # Factor 3: Category risk (0-20 points)
+    high_risk_categories = ["gambling", "alcohol", "tobacco", "cryptocurrency"]
+    medium_risk_categories = ["entertainment", "dining out", "luxury", "shopping"]
+    
+    cat_lower = category.lower()
+    if any(cat in cat_lower for cat in high_risk_categories):
+        risk_score += 20
+        risk_factors.append(f"Category '{category}' is flagged as high-risk")
+    elif any(cat in cat_lower for cat in medium_risk_categories):
+        risk_score += 10
+        risk_factors.append(f"Category '{category}' is discretionary spending")
+    
+    # Factor 4: Recurring commitment (0-15 points)
+    if is_recurring:
+        risk_score += 15
+        risk_factors.append("Recurring purchase creates ongoing commitment")
+    
+    # Factor 5: Essential vs wants (-10 to +10 points)
+    if is_essential:
+        risk_score = max(0, risk_score - 10)
+        risk_factors.append("Essential purchase (reduced risk)")
+    else:
+        risk_score += 5
+        risk_factors.append("Non-essential purchase")
+    
+    # Determine risk level
+    risk_score = min(100, max(0, risk_score))
+    
+    if risk_score >= 70:
+        risk_level = "CRITICAL"
+    elif risk_score >= 50:
+        risk_level = "HIGH"
+    elif risk_score >= 30:
+        risk_level = "MEDIUM"
+    else:
+        risk_level = "LOW"
+    
+    result = {
+        "risk_score": risk_score,
+        "risk_level": risk_level,
+        "risk_factors": risk_factors,
+        "amount": amount,
+        "category": category,
+        "recommendation": "PROCEED" if risk_score < 50 else "REVIEW" if risk_score < 70 else "AVOID"
+    }
+    
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def validate_agent_action(
+    action_type: str,
+    amount: float,
+    category: str = "General",
+    agent_id: Optional[str] = None,
+) -> str:
+    """
+    Validate whether an agent action is permitted under current rules.
+    
+    AGENT GUARD RAIL — Generic validator for any agent financial action.
+    
+    Args:
+        action_type: Type of action ("purchase", "transfer", "subscription", "recurring_payment").
+        amount: The monetary amount involved.
+        category: The spending category.
+        agent_id: Optional identifier for the requesting agent.
+    
+    Returns:
+        JSON with is_permitted, reason, and any restrictions.
+    """
+    valid_action_types = ["purchase", "transfer", "subscription", "recurring_payment"]
+    
+    if action_type.lower() not in valid_action_types:
+        return json.dumps({
+            "is_permitted": False,
+            "reason": f"Unknown action type '{action_type}'. Valid types: {', '.join(valid_action_types)}",
+            "action_type": action_type,
+        }, indent=2)
+    
+    # Default restrictions
+    restrictions = {
+        "purchase": {"max_amount": 50.0, "requires_approval_above": 50.0},
+        "transfer": {"max_amount": 100.0, "requires_approval_above": 25.0},
+        "subscription": {"max_amount": 20.0, "requires_approval_above": 10.0},
+        "recurring_payment": {"max_amount": 100.0, "requires_approval_above": 50.0},
+    }
+    
+    action_restrictions = restrictions.get(action_type.lower(), {})
+    max_amount = action_restrictions.get("max_amount", 50.0)
+    approval_threshold = action_restrictions.get("requires_approval_above", 50.0)
+    
+    result = {
+        "action_type": action_type,
+        "amount": amount,
+        "category": category,
+        "agent_id": agent_id,
+        "max_allowed": max_amount,
+        "approval_threshold": approval_threshold,
+    }
+    
+    if amount > max_amount:
+        result["is_permitted"] = False
+        result["reason"] = f"Amount ${amount:.2f} exceeds maximum allowed ${max_amount:.2f} for {action_type}."
+        result["requires_human_approval"] = True
+    elif amount > approval_threshold:
+        result["is_permitted"] = True
+        result["reason"] = f"Action is permitted but exceeds ${approval_threshold:.2f}. Human notification recommended."
+        result["requires_human_approval"] = True
+    else:
+        result["is_permitted"] = True
+        result["reason"] = f"Action is within agent limits."
+        result["requires_human_approval"] = False
+    
+    return json.dumps(result, indent=2)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AGENT GUARD RAILS — Database-backed tools for managing agent settings
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def set_agent_spending_limits(
+    username: str,
+    single_transaction_limit: Optional[float] = None,
+    daily_limit: Optional[float] = None,
+    weekly_limit: Optional[float] = None,
+    monthly_limit: Optional[float] = None,
+    require_approval_above: Optional[float] = None,
+) -> str:
+    """
+    Set or update spending limits for autonomous agents.
+    
+    AGENT GUARD RAIL — Allows users to configure how much agents can spend on their behalf.
+    
+    Args:
+        username: The user's identifier.
+        single_transaction_limit: Max amount per transaction (default $50).
+        daily_limit: Max daily spending by agents (default $100).
+        weekly_limit: Max weekly spending by agents (default $500).
+        monthly_limit: Max monthly spending by agents (default $2000).
+        require_approval_above: Require human approval above this amount (default $100).
+    
+    Returns:
+        JSON with the updated agent settings.
+    """
+    try:
+        supabase = get_supabase()
+        
+        # Look up user ID from username
+        user_id = agent_guard_service.get_or_create_user_id(supabase, username)
+        
+        # Check if settings exist
+        existing = agent_guard_service.get_agent_settings(supabase, user_id)
+        
+        if existing:
+            # Update existing settings
+            update_data = AgentSettingsUpdate(
+                single_transaction_limit=single_transaction_limit,
+                daily_limit=daily_limit,
+                weekly_limit=weekly_limit,
+                monthly_limit=monthly_limit,
+                require_approval_above=require_approval_above,
+            )
+            result = agent_guard_service.update_agent_settings(supabase, user_id, update_data)
+        else:
+            # Create new settings
+            create_data = AgentSettingsCreate(
+                single_transaction_limit=single_transaction_limit or 50.0,
+                daily_limit=daily_limit or 100.0,
+                weekly_limit=weekly_limit or 500.0,
+                monthly_limit=monthly_limit or 2000.0,
+                require_approval_above=require_approval_above or 100.0,
+            )
+            result = agent_guard_service.create_agent_settings(supabase, user_id, create_data)
+        
+        if result:
+            return json.dumps({
+                "success": True,
+                "message": "Agent spending limits updated.",
+                "settings": {
+                    "single_transaction_limit": result.single_transaction_limit,
+                    "daily_limit": result.daily_limit,
+                    "weekly_limit": result.weekly_limit,
+                    "monthly_limit": result.monthly_limit,
+                    "require_approval_above": result.require_approval_above,
+                }
+            }, indent=2)
+        else:
+            return json.dumps({"success": False, "error": "Failed to update settings"}, indent=2)
+            
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool()
+def get_agent_settings(username: str = "default_user") -> str:
+    """
+    Get the current agent spending settings for a user.
+    
+    AGENT GUARD RAIL — Returns all configured limits and restrictions.
+    
+    Args:
+        username: The user's identifier.
+    
+    Returns:
+        JSON with all agent settings including limits and category restrictions.
+    """
+    try:
+        supabase = get_supabase()
+        
+        # Look up user ID from username
+        user_id = agent_guard_service.get_or_create_user_id(supabase, username)
+        settings = agent_guard_service.get_or_create_agent_settings(supabase, user_id)
+        
+        return json.dumps({
+            "username": username,
+            "single_transaction_limit": settings.single_transaction_limit,
+            "daily_limit": settings.daily_limit,
+            "weekly_limit": settings.weekly_limit,
+            "monthly_limit": settings.monthly_limit,
+            "require_approval_above": settings.require_approval_above,
+            "allowed_categories": settings.allowed_categories,
+            "blocked_categories": settings.blocked_categories,
+            "is_active": settings.is_active,
+        }, indent=2)
+        
+    except Exception as e:
+        # Return default limits if database is not available
+        return json.dumps({
+            "username": username,
+            "single_transaction_limit": 50.0,
+            "daily_limit": 100.0,
+            "weekly_limit": 500.0,
+            "monthly_limit": 2000.0,
+            "require_approval_above": 100.0,
+            "allowed_categories": None,
+            "blocked_categories": [],
+            "is_active": True,
+            "note": f"Using default limits (database unavailable: {str(e)})"
+        }, indent=2)
+
+
+@mcp.tool()
+def log_agent_authorization(
+    username: str,
+    action_type: str,
+    amount: float,
+    status: str,
+    category: Optional[str] = None,
+    merchant: Optional[str] = None,
+    reason: Optional[str] = None,
+    authorization_token: Optional[str] = None,
+    agent_id: Optional[str] = None,
+) -> str:
+    """
+    Log an agent authorization attempt for audit purposes.
+    
+    AGENT GUARD RAIL — Creates an audit trail of all agent spending attempts.
+    
+    Args:
+        username: The user's identifier.
+        action_type: Type of action ("purchase", "transfer", "subscription").
+        amount: The monetary amount.
+        status: Authorization status ("APPROVED", "DENIED", "CAUTION", "REQUIRES_HUMAN_APPROVAL").
+        category: The spending category.
+        merchant: The merchant name.
+        reason: Explanation for the authorization decision.
+        authorization_token: Unique token for this authorization.
+        agent_id: Identifier of the requesting agent.
+    
+    Returns:
+        JSON confirming the log entry was created.
+    """
+    try:
+        supabase = get_supabase()
+        
+        # Look up user ID from username
+        user_id = agent_guard_service.get_or_create_user_id(supabase, username)
+        
+        # Parse status
+        try:
+            status_enum = AuthorizationStatus(status.upper())
+        except ValueError:
+            status_enum = AuthorizationStatus.ERROR
+        
+        log_data = AuthorizationLogCreate(
+            agent_id=agent_id,
+            action_type=action_type,
+            amount=amount,
+            category=category,
+            merchant=merchant,
+            status=status_enum,
+            reason=reason,
+            authorization_token=authorization_token,
+        )
+        
+        result = agent_guard_service.log_authorization(supabase, user_id, log_data)
+        
+        return json.dumps({
+            "success": True,
+            "log_id": result.id,
+            "authorization_token": result.authorization_token,
+            "message": f"Authorization logged: {status} for ${amount:.2f} {action_type}"
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool()
+def get_agent_authorization_history(
+    username: str,
+    limit: int = 20,
+    status_filter: Optional[str] = None,
+) -> str:
+    """
+    Get the authorization history for a user's agents.
+    
+    AGENT GUARD RAIL — Shows all past authorization attempts for auditing.
+    
+    Args:
+        username: The user's identifier.
+        limit: Maximum number of records to return (default 20).
+        status_filter: Optional filter by status ("APPROVED", "DENIED", etc.).
+    
+    Returns:
+        JSON with list of authorization attempts.
+    """
+    try:
+        supabase = get_supabase()
+        
+        # Look up user ID from username
+        user_id = agent_guard_service.get_or_create_user_id(supabase, username)
+        
+        history = agent_guard_service.get_authorization_history(
+            supabase, user_id, limit=limit, status_filter=status_filter
+        )
+        
+        records = []
+        for entry in history:
+            records.append({
+                "id": entry.id,
+                "agent_id": entry.agent_id,
+                "action_type": entry.action_type,
+                "amount": entry.amount,
+                "category": entry.category,
+                "merchant": entry.merchant,
+                "status": entry.status,
+                "reason": entry.reason,
+                "was_executed": entry.was_executed,
+                "created_at": entry.created_at.isoformat() if entry.created_at else None,
+            })
+        
+        return json.dumps({
+            "username": username,
+            "total_records": len(records),
+            "history": records
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e), "history": []}, indent=2)
+
+
+@mcp.tool()
+def get_cumulative_agent_spend(
+    username: str,
+    period: str = "daily",
+) -> str:
+    """
+    Get cumulative spending by agents for a time period.
+    
+    AGENT GUARD RAIL — Shows how much agents have spent on behalf of the user.
+    
+    Args:
+        username: The user's identifier.
+        period: Time period ("daily", "weekly", "monthly").
+    
+    Returns:
+        JSON with cumulative spend and remaining limits.
+    """
+    try:
+        supabase = get_supabase()
+        
+        # Look up user ID from username
+        user_id = agent_guard_service.get_or_create_user_id(supabase, username)
+        
+        cumulative = agent_guard_service.get_cumulative_agent_spend(supabase, user_id, period)
+        settings = agent_guard_service.get_or_create_agent_settings(supabase, user_id)
+        
+        if period == "daily":
+            limit = settings.daily_limit
+        elif period == "weekly":
+            limit = settings.weekly_limit
+        else:
+            limit = settings.monthly_limit
+        
+        remaining = limit - cumulative
+        
+        return json.dumps({
+            "username": username,
+            "period": period,
+            "cumulative_spend": cumulative,
+            "period_limit": limit,
+            "remaining": max(0, remaining),
+            "limit_reached": cumulative >= limit,
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({
+            "username": username,
+            "period": period,
+            "cumulative_spend": 0,
+            "error": str(e)
+        }, indent=2)
+
 
 if __name__ == "__main__":
     mcp.run()

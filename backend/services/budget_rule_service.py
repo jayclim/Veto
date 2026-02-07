@@ -30,7 +30,7 @@ def create_rule(
         "is_active": True,
         "created_at": datetime.utcnow().isoformat(),
     }
-    result = supabase.table("budget_rule").insert(row).execute()
+    result = supabase.table("veto_budget_rules").insert(row).execute()
     return BudgetRulePublic(**result.data[0])
 
 
@@ -40,7 +40,7 @@ def get_rules(
     active_only: bool = True,
 ) -> list[BudgetRulePublic]:
     """List all budget rules for a user."""
-    query = supabase.table("budget_rule").select("*").eq("user_id", user_id)
+    query = supabase.table("veto_budget_rules").select("*").eq("user_id", user_id)
     if active_only:
         query = query.eq("is_active", True)
     result = query.execute()
@@ -54,7 +54,7 @@ def delete_rule(
 ) -> bool:
     """Delete a budget rule. Returns True if deleted."""
     result = (
-        supabase.table("budget_rule")
+        supabase.table("veto_budget_rules")
         .delete()
         .eq("id", rule_id)
         .eq("user_id", user_id)
@@ -69,7 +69,7 @@ def check_rule_compliance(
 ) -> dict:
     """Check if the user is following their active budget rules."""
     rules_result = (
-        supabase.table("budget_rule")
+        supabase.table("veto_budget_rules")
         .select("*")
         .eq("user_id", user_id)
         .eq("is_active", True)
@@ -81,7 +81,7 @@ def check_rule_compliance(
         return {"status": "no_rules", "message": "No active budget rules found."}
 
     # Get transactions for analysis
-    tx_result = supabase.table("transaction").select("*").eq("user_id", user_id).execute()
+    tx_result = supabase.table("veto_transactions").select("*").eq("user_id", user_id).execute()
     transactions = tx_result.data
 
     total_income = sum(t["amount"] for t in transactions if t["transaction_type"] == TransactionType.income.value)
@@ -95,7 +95,11 @@ def check_rule_compliance(
 
     results = []
     for rule in rules:
-        config = json.loads(rule["config"]) if rule["config"] else {}
+        if isinstance(rule["config"], dict):
+            config = rule["config"]
+        else:
+            config = json.loads(rule["config"]) if rule["config"] else {}
+            
         rule_type = rule["rule_type"]
         compliance = {"rule_name": rule["name"], "rule_type": rule_type}
 
@@ -110,9 +114,52 @@ def check_rule_compliance(
                 compliance["compliant"] = None
                 compliance["message"] = "No income recorded yet."
 
+        elif rule_type == RuleType.percentage_needs.value:
+            # Needs: Housing, Utilities, Food & Dining, Transportation
+            needs_categories = ["Housing", "Utilities", "Food & Dining", "Transportation", "Health", "Insurance"]
+            current_needs_spend = sum(expense_by_cat.get(c, 0) for c in needs_categories)
+            
+            target_pct = config.get("percent", 50)
+            target_amount = (total_income * target_pct) / 100
+            
+            compliance["category"] = "Needs (Housing, Food, Transport, Utilities)"
+            compliance["limit"] = target_amount
+            compliance["spent"] = current_needs_spend
+            
+            if total_income > 0:
+                actual_pct = (current_needs_spend / total_income) * 100
+                compliance["actual_savings_pct"] = round(actual_pct, 1) # Using same field for % display
+                compliance["target_savings_pct"] = target_pct
+                compliance["compliant"] = actual_pct <= target_pct
+            else:
+                compliance["compliant"] = None
+                compliance["message"] = "No income recorded yet."
+
+        elif rule_type == RuleType.percentage_wants.value:
+            # Wants: Entertainment, Shopping, Travel, Personal Care
+            wants_categories = ["Entertainment", "Shopping", "Travel", "Personal Care", "Subscriptions"]
+            current_wants_spend = sum(expense_by_cat.get(c, 0) for c in wants_categories)
+            
+            target_pct = config.get("percent", 30)
+            target_amount = (total_income * target_pct) / 100
+            
+            compliance["category"] = "Wants (Entertainment, Shopping, etc.)"
+            compliance["limit"] = target_amount
+            compliance["spent"] = current_wants_spend
+            
+            if total_income > 0:
+                actual_pct = (current_wants_spend / total_income) * 100
+                compliance["actual_savings_pct"] = round(actual_pct, 1)
+                compliance["target_savings_pct"] = target_pct
+                compliance["compliant"] = actual_pct <= target_pct
+            else:
+                compliance["compliant"] = None
+                compliance["message"] = "No income recorded yet."
+
         elif rule_type == RuleType.category_limit.value:
             category = config.get("category", "")
-            limit = config.get("limit", 0)
+            # AI sometimes generates 'monthly_limit' or 'threshold'
+            limit = config.get("limit") or config.get("monthly_limit") or config.get("threshold") or 0
             spent = expense_by_cat.get(category, 0)
             compliance["category"] = category
             compliance["limit"] = limit
@@ -128,14 +175,22 @@ def check_rule_compliance(
 
         elif rule_type == RuleType.spending_alert.value:
             category = config.get("category", "")
-            threshold = config.get("threshold", 0)
+            # AI sometimes generates 'monthly_limit' or 'limit'
+            threshold = config.get("threshold") or config.get("limit") or config.get("monthly_limit") or 0
             spent = expense_by_cat.get(category, 0)
             compliance["category"] = category
             compliance["threshold"] = threshold
+            compliance["limit"] = threshold  # Populate limit too so frontend can treat it like a limit
             compliance["spent"] = spent
             compliance["alert_triggered"] = spent >= threshold
             compliance["compliant"] = spent < threshold
 
         results.append(compliance)
 
-    return {"status": "checked", "rules": results}
+    return {
+        "status": "checked",
+        "total_income": total_income,
+        "total_expenses": total_expenses,
+        "net": total_income - total_expenses,
+        "rules": results,
+    }

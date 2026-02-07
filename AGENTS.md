@@ -27,13 +27,13 @@ Veto is an AI-powered personal budgeting app with integrated AI agents. Users lo
 | `backend/database.py` | Supabase client initialization |
 | `backend/models.py` | Table models (DB) + Public models (Pydantic schemas with camelCase aliases) |
 | `backend/auth.py` | `X-User-Username` header — find or create user |
-| `backend/mcp_server.py` | Veto MCP Server — exposes budget tools for AI agents |
+| [VetoMCP](https://github.com/jayclim/VetoMCP) | External MCP Server — exposes budget tools for AI agents (separate repo) |
 | `backend/services/agent_service.py` | AI agent with Dedalus Labs integration |
 | `backend/services/transaction_service.py` | `add_transaction`, `delete_transaction`, `get_transactions` |
-| `backend/services/budget_service.py` | `create_category`, `get_categories`, `get_dashboard_summary` |
 | `backend/services/budget_rule_service.py` | Budget rules management and compliance checking |
+| `backend/services/agent_guard_service.py` | Agent guard rails: spending limits, authorization, audit logging |
 | `backend/routes/transactions.py` | `POST/GET/DELETE /api/v1/transactions` |
-| `backend/routes/budgets.py` | `POST/GET /api/v1/budgets/categories`, `GET /api/v1/budgets/dashboard` |
+| `backend/routes/budgets.py` | `POST/GET /api/v1/budgets/rules`, `GET /api/v1/budgets/compliance` |
 | `backend/routes/chat.py` | `POST /api/v1/chat` — AI assistant endpoint |
 
 ---
@@ -58,9 +58,9 @@ All routes are prefixed with `/api/v1`. All require the `X-User-Username` header
 | `POST` | `/transactions` | Create a transaction |
 | `GET` | `/transactions` | List transactions (filters: `category`, `transaction_type`, `start_date`, `end_date`) |
 | `DELETE` | `/transactions/{id}` | Delete a transaction |
-| `POST` | `/budgets/categories` | Create a budget category |
-| `GET` | `/budgets/categories` | List budget categories |
-| `GET` | `/budgets/dashboard` | Dashboard summary (income, expenses, net, per-category breakdown) |
+| `POST` | `/budgets/rules` | Create a budget rule |
+| `GET` | `/budgets/rules` | List budget rules |
+| `GET` | `/budgets/compliance` | Check budget compliance (income, expenses, net, rule status) |
 | `POST` | `/chat` | Send message to AI assistant, returns response with optional actions |
 
 **JSON convention:** Backend uses `snake_case` internally; API responses use `camelCase` (e.g., `transactionType`, `totalIncome`, `createdAt`).
@@ -103,17 +103,17 @@ The agent receives financial context (dashboard summary, categories, recent tran
 
 ### MCP Tools Available to Agent
 Via Dedalus Labs, the agent has access to:
-- **VetoMCP** — Budget management tools
+- **VetoMCP** ([jayclim/VetoMCP](https://github.com/jayclim/VetoMCP)) — Budget management tools (external repo)
 - **NessieMCP** (`tpparikh/abc`) — Capital One sandbox API
 - **VisaMCP** (`tpparikh/-visaMCP`) — Visa APIs (limited access)
 
 ---
 
-## Veto MCP Server
+## VetoMCP (External Repository)
 
-**File:** `backend/mcp_server.py`
+**Repository:** [github.com/jayclim/VetoMCP](https://github.com/jayclim/VetoMCP)
 
-The Veto MCP Server exposes budget tools for AI agents via the Model Context Protocol. It's built with `FastMCP`.
+The Veto MCP Server is maintained in a separate repository and exposes budget tools for AI agents via the Model Context Protocol.
 
 ### Server Tools (Require Database)
 
@@ -122,8 +122,6 @@ The Veto MCP Server exposes budget tools for AI agents via the Model Context Pro
 | `add_transaction` | Record a new financial transaction (expense or income) |
 | `delete_transaction` | Delete a transaction by ID |
 | `get_transactions` | List recent transactions with optional filtering |
-| `create_budget_category` | Create a new budget category with monthly limit |
-| `get_budget_categories` | List all budget categories and their limits |
 | `get_dashboard_summary` | Get financial summary (income, expenses, net, category breakdown) |
 | `create_budget_rule` | Create budget rule (percentage_allocation, category_limit, savings_goal, spending_alert) |
 | `get_budget_rules` | List all active budget rules |
@@ -141,10 +139,40 @@ The Veto MCP Server exposes budget tools for AI agents via the Model Context Pro
 | `get_budget_health_score` | Calculate 0-100 financial health score with grade (A-F) |
 | `project_monthly_spending` | Project end-of-month spending based on current pace |
 
-### Running the MCP Server
-```bash
-cd backend && python mcp_server.py
+### Agent Guard Rails (For External Autonomous Agents)
+
+These tools enable external autonomous agents to check budget compliance **before** making purchases on behalf of users. They are advisory tools that help prevent agents from overspending.
+
+**Local Tools (No Database):**
+
+| Tool | Description |
+|------|-------------|
+| `authorize_purchase` | **Primary tool** — Check if purchase is authorized (returns APPROVED/DENIED/CAUTION/REQUIRES_HUMAN_APPROVAL) |
+| `get_agent_spending_limits` | Get configured spending limits for agents (daily, weekly, monthly, per-transaction) |
+| `assess_purchase_risk` | Calculate risk score (0-100) with risk factors and recommendation |
+| `validate_agent_action` | Validate any agent action type (purchase, transfer, subscription, recurring_payment) |
+
+**Database-Backed Tools:**
+
+| Tool | Description |
+|------|-------------|
+| `set_agent_spending_limits` | Configure user's spending limits for agents |
+| `get_agent_settings` | Get all agent settings including category restrictions |
+| `log_agent_authorization` | Log authorization attempts for audit trail |
+| `get_agent_authorization_history` | View past authorization attempts |
+| `get_cumulative_agent_spend` | Get cumulative agent spending by period (daily/weekly/monthly) |
+
+**Example Flow for External Agent:**
 ```
+1. Agent calls get_agent_spending_limits(username) to understand limits
+2. Agent calls authorize_purchase(username, amount, category, merchant)
+3. VetoMCP returns: { "status": "APPROVED", "budget_remaining": 250.00 }
+4. Agent proceeds with purchase via Nessie/Visa
+5. Agent calls log_agent_authorization(...) to record the action
+```
+
+### Running the MCP Server
+See the [VetoMCP README](https://github.com/jayclim/VetoMCP) for setup and running instructions.
 
 ---
 
@@ -182,7 +210,7 @@ Seeds both Supabase and Nessie sandbox with realistic financial data.
 **Usage:**
 ```bash
 cd backend/scripts
-python seed_nessie.py [username]  # Defaults to "jayden" if no username provided
+python seed_nessie.py <username>  # Username is required
 ```
 
 **What it seeds:**
@@ -190,7 +218,7 @@ python seed_nessie.py [username]  # Defaults to "jayden" if no username provided
 **Supabase:**
 - Creates/finds user by username
 - Clears existing data for the user
-- Creates 6 budget categories (Housing, Food & Dining, Transportation, Entertainment, Shopping, Utilities)
+- Creates 7 budget rules (Housing, Food, Transport, etc. + Savings Goal)
 - Creates 15 sample transactions spanning the last week
 
 **Nessie (via Dedalus Labs):**
@@ -232,9 +260,6 @@ npm install && npm run dev
 
 # Seed data (optional)
 cd backend/scripts && python seed_nessie.py [username]
-
-# Run MCP Server standalone (for testing)
-cd backend && python mcp_server.py
 ```
 
 ---
@@ -252,7 +277,7 @@ DEDALUS_API_KEY=your-dedalus-api-key
 ---
 
 ## Key Design Decisions
-- **Supabase** for managed PostgreSQL with real-time capabilities
+- **Supabase** for managed PostgreSQL — all tables use `veto_` prefix: `veto_users`, `veto_transactions`, `veto_budget_rules`, `veto_agent_settings`, `veto_agent_authorization_log`
 - **Header-based auth** (`X-User-Username`) — simple, no tokens, hackathon-friendly
 - **Service layer pattern** — routes are thin wrappers, logic is testable and MCP-portable
 - **camelCase aliases** on Pydantic models so the frontend gets idiomatic JSON without manual conversion

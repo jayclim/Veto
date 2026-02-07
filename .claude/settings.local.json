@@ -17,7 +17,18 @@
       "Bash(done)",
       "Bash(python:*)",
       "Bash(/Users/jaydenl/anaconda3/bin/python:*)",
-      "Bash(python3.10:*)"
+      "Bash(python3.10:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:deepwiki.com)",
+      "Bash(ls:*)",
+      "Bash(/Users/jaydenl/anaconda3/bin/python3.11:*)",
+      "Bash(claude mcp add:*)",
+      "mcp__supabase__list_tables",
+      "mcp__supabase__execute_sql"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "supabase"
+  ]
 }

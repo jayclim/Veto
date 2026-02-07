@@ -30,7 +30,7 @@ def add_transaction(
         "date": (data.date or datetime.utcnow()).isoformat(),
         "created_at": datetime.utcnow().isoformat(),
     }
-    result = supabase.table("transaction").insert(row).execute()
+    result = supabase.table("veto_transactions").insert(row).execute()
     return TransactionPublic(**result.data[0])
 
 
@@ -41,7 +41,7 @@ def delete_transaction(
 ) -> bool:
     """Delete a transaction owned by the user. Returns True if deleted."""
     result = (
-        supabase.table("transaction")
+        supabase.table("veto_transactions")
         .delete()
         .eq("id", transaction_id)
         .eq("user_id", user_id)
@@ -59,7 +59,7 @@ def get_transactions(
     end_date: Optional[datetime] = None,
 ) -> list[TransactionPublic]:
     """Retrieve transactions for a user with optional filters."""
-    query = supabase.table("transaction").select("*").eq("user_id", user_id)
+    query = supabase.table("veto_transactions").select("*").eq("user_id", user_id)
 
     if category:
         query = query.eq("category", category)

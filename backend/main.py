@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routes import budgets, transactions, chat
+from routes import budgets, onboarding, transactions, chat
 
 app = FastAPI(title="Veto Budget API", version="0.1.0")
 
@@ -16,6 +16,7 @@ app.add_middleware(
 app.include_router(transactions.router, prefix="/api/v1")
 app.include_router(budgets.router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")
+app.include_router(onboarding.router, prefix="/api/v1")
 
 
 @app.get("/api/v1/health")

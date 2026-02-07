@@ -10,11 +10,11 @@ def get_current_user(
     supabase: Client = Depends(get_supabase),
 ) -> User:
     """Find or create a user based on the X-User-Username header."""
-    result = supabase.table("user").select("*").eq("username", x_user_username).execute()
+    result = supabase.table("veto_users").select("*").eq("username", x_user_username).execute()
 
     if result.data:
-        return User(**result.data[0])
+        return User(**result.data[0], is_new=False)
 
     new_user = {"id": _generate_id(), "username": x_user_username}
-    insert_result = supabase.table("user").insert(new_user).execute()
-    return User(**insert_result.data[0])
+    insert_result = supabase.table("veto_users").insert(new_user).execute()
+    return User(**insert_result.data[0], is_new=True)

@@ -16,13 +16,12 @@ SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 MCP_SERVER = "tpparikh/abc"
 
 # Seed data definitions (shared between Nessie and Supabase)
-BUDGET_CATEGORIES = [
-    {"name": "Housing", "monthly_limit": 1500},
-    {"name": "Food & Dining", "monthly_limit": 500},
-    {"name": "Transportation", "monthly_limit": 300},
-    {"name": "Entertainment", "monthly_limit": 200},
-    {"name": "Shopping", "monthly_limit": 250},
-    {"name": "Utilities", "monthly_limit": 200},
+BUDGET_RULES = [
+    {
+        "name": "50/30/20 Allocation",
+        "rule_type": "percentage_allocation",
+        "config": '{"needs": 50, "wants": 30, "savings": 20}'
+    }
 ]
 
 TRANSACTIONS = [
@@ -45,33 +44,40 @@ TRANSACTIONS = [
 
 
 def seed_supabase(username: str):
-    """Seed the Supabase database with user, budget categories, and transactions."""
+    """Seed the Supabase database with user, budget rules, and transactions."""
     print("\n📦 Seeding Supabase database...")
     sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
     # Find or create user
-    result = sb.table("user").select("*").eq("username", username).execute()
+    result = sb.table("veto_users").select("*").eq("username", username).execute()
     if result.data:
         user_id = result.data[0]["id"]
         print(f"  Found existing user: {username} ({user_id})")
     else:
         user_id = uuid4().hex
-        sb.table("user").insert({"id": user_id, "username": username}).execute()
+        sb.table("veto_users").insert({"id": user_id, "username": username}).execute()
         print(f"  Created user: {username} ({user_id})")
 
     # Clear existing data for this user
-    sb.table("budget_rule").delete().eq("user_id", user_id).execute()
-    sb.table("budget_category").delete().eq("user_id", user_id).execute()
-    sb.table("transaction").delete().eq("user_id", user_id).execute()
+    sb.table("veto_budget_rules").delete().eq("user_id", user_id).execute()
+    sb.table("veto_transactions").delete().eq("user_id", user_id).execute()
     print("  Cleared existing data.")
 
-    # Insert budget categories
-    cat_rows = [
-        {"id": uuid4().hex, "user_id": user_id, "name": c["name"], "monthly_limit": c["monthly_limit"]}
-        for c in BUDGET_CATEGORIES
+    # Insert budget rules
+    rule_rows = [
+        {
+            "id": uuid4().hex,
+            "user_id": user_id,
+            "name": r["name"],
+            "rule_type": r["rule_type"],
+            "config": r["config"],
+            "is_active": True,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        for r in BUDGET_RULES
     ]
-    sb.table("budget_category").insert(cat_rows).execute()
-    print(f"  Created {len(cat_rows)} budget categories.")
+    sb.table("veto_budget_rules").insert(rule_rows).execute()
+    print(f"  Created {len(rule_rows)} budget rules.")
 
     # Insert transactions
     now = datetime.now(timezone.utc)
@@ -87,7 +93,7 @@ def seed_supabase(username: str):
         }
         for t in TRANSACTIONS
     ]
-    sb.table("transaction").insert(tx_rows).execute()
+    sb.table("veto_transactions").insert(tx_rows).execute()
     print(f"  Created {len(tx_rows)} transactions.")
     print("✅ Supabase seeding complete.")
 
@@ -160,9 +166,10 @@ async def seed_nessie(username: str):
 
 
 async def main():
-    username = "jayden"
-    if len(sys.argv) > 1:
-        username = sys.argv[1]
+    if len(sys.argv) < 2:
+        print("Usage: python seed_nessie.py <username>")
+        return
+    username = sys.argv[1]
 
     print(f"🌱 Seeding data for user: {username}")
 

@@ -8,36 +8,36 @@ from supabase import Client
 from auth import get_current_user
 from database import get_supabase
 from models import (
-    BudgetCategoryCreate,
-    BudgetCategoryPublic,
-    DashboardSummary,
+    BudgetRuleCreate,
+    BudgetRulePublic,
+    BudgetCompliance,
     User,
 )
-from services import budget_service
+from services import budget_rule_service
 
 router = APIRouter(prefix="/budgets", tags=["budgets"])
 
 
-@router.post("/categories", response_model=BudgetCategoryPublic)
-def create_category(
-    body: BudgetCategoryCreate,
+@router.post("/rules", response_model=BudgetRulePublic)
+def create_rule(
+    body: BudgetRuleCreate,
     user: User = Depends(get_current_user),
     supabase: Client = Depends(get_supabase),
 ):
-    return budget_service.create_category(supabase, user.id, body)
+    return budget_rule_service.create_rule(supabase, user.id, body)
 
 
-@router.get("/categories", response_model=List[BudgetCategoryPublic])
-def list_categories(
+@router.get("/rules", response_model=List[BudgetRulePublic])
+def list_rules(
     user: User = Depends(get_current_user),
     supabase: Client = Depends(get_supabase),
 ):
-    return budget_service.get_categories(supabase, user.id)
+    return budget_rule_service.get_rules(supabase, user.id)
 
 
-@router.get("/dashboard", response_model=DashboardSummary)
-def dashboard(
+@router.get("/compliance", response_model=BudgetCompliance)
+def check_compliance(
     user: User = Depends(get_current_user),
     supabase: Client = Depends(get_supabase),
 ):
-    return budget_service.get_dashboard_summary(supabase, user.id)
+    return budget_rule_service.check_rule_compliance(supabase, user.id)

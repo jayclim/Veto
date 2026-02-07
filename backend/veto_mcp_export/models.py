@@ -19,105 +19,8 @@ class CamelModel(BaseModel):
     model_config = ConfigDict(
         alias_generator=_camel_alias,
         populate_by_name=True,
+        from_attributes=True,
     )
-
-
-# ── Enums ────────────────────────────────────────────────────────
-
-
-class TransactionType(str, Enum):
-    income = "income"
-    expense = "expense"
-
-
-class RuleType(str, Enum):
-    percentage_allocation = "percentage_allocation"  # Kept for backward compatibility/savings
-    percentage_needs = "percentage_needs"
-    percentage_wants = "percentage_wants"
-    category_limit = "category_limit"
-    savings_goal = "savings_goal"
-    spending_alert = "spending_alert"
-
-
-# ── User Model ───────────────────────────────────────────────────
-
-
-class User(BaseModel):
-    id: str
-    username: str
-    created_at: datetime
-    is_new: bool = False
-
-
-# ── Public Models (Pydantic schemas for API) ─────────────────────
-
-
-class TransactionCreate(CamelModel):
-    amount: float
-    description: str
-    category: str = "Uncategorized"
-    transaction_type: TransactionType = TransactionType.expense
-    date: Optional[datetime] = None
-
-
-class TransactionPublic(CamelModel):
-    id: str
-    amount: float
-    description: str
-    category: str
-    transaction_type: TransactionType
-    date: datetime
-    created_at: datetime
-
-
-
-class ComplianceResult(CamelModel):
-    rule_name: str
-    rule_type: str
-    compliant: Optional[bool] = None
-    message: Optional[str] = None
-    # Flexible fields for different rule types
-    target_savings_pct: Optional[float] = None
-    actual_savings_pct: Optional[float] = None
-    category: Optional[str] = None
-    limit: Optional[float] = None
-    spent: Optional[float] = None
-    goal: Optional[float] = None
-    saved: Optional[float] = None
-    threshold: Optional[float] = None
-    alert_triggered: Optional[bool] = None
-
-
-class BudgetCompliance(CamelModel):
-    status: str
-    total_income: float
-    total_expenses: float
-    net: float
-    rules: List[ComplianceResult]
-
-
-class UserPublic(CamelModel):
-    id: str
-    username: str
-    created_at: datetime
-
-
-class BudgetRuleCreate(CamelModel):
-    rule_type: RuleType
-    name: str
-    config: str  # JSON string
-
-
-class BudgetRulePublic(CamelModel):
-    id: str
-    rule_type: RuleType
-    name: str
-    config: str
-    is_active: bool
-    created_at: datetime
-
-
-# ── Agent Guard Rails Models ─────────────────────────────────────
 
 
 class AuthorizationStatus(str, Enum):
@@ -143,6 +46,7 @@ class AgentSettingsCreate(CamelModel):
     require_approval_above: float = 100.0
     allowed_categories: Optional[List[str]] = None
     blocked_categories: Optional[List[str]] = None
+    is_active: bool = True
 
 
 class AgentSettingsUpdate(CamelModel):
@@ -185,7 +89,7 @@ class AgentSettingsPublic(CamelModel):
 
 class AuthorizationLogCreate(CamelModel):
     agent_id: Optional[str] = None
-    action_type: str
+    action_type: str  # purchase, transfer, subscription
     amount: float
     category: Optional[str] = None
     merchant: Optional[str] = None
@@ -198,16 +102,16 @@ class AuthorizationLogCreate(CamelModel):
 
 class AuthorizationLogPublic(CamelModel):
     id: str
-    agent_id: Optional[str]
+    user_id: str
+    agent_id: Optional[str] = None
     action_type: str
     amount: float
-    category: Optional[str]
-    merchant: Optional[str]
-    description: Optional[str]
+    category: Optional[str] = None
+    merchant: Optional[str] = None
+    description: Optional[str] = None
     status: str
-    reason: Optional[str]
-    risk_score: Optional[int]
-    authorization_token: Optional[str]
+    reason: Optional[str] = None
+    risk_score: Optional[int] = None
+    authorization_token: Optional[str] = None
     was_executed: bool
     created_at: datetime
-

@@ -7,13 +7,14 @@ from typing import Optional, List, Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 from supabase import Client
 
 from auth import get_current_user
 from database import get_supabase
 from models import User
-from services.agent_service import generate_response
+from services.agent_service import generate_response, generate_response_stream
 
 
 def _camel_alias(field_name: str) -> str:
@@ -64,6 +65,7 @@ async def chat(
         response_content, executed_actions = await generate_response(
             supabase=supabase,
             user_id=user.id,
+            username=user.username,
             user_message=body.message,
             conversation_history=body.conversation_history,
         )
@@ -82,3 +84,27 @@ async def chat(
         print(f"[CHAT ERROR] {type(e).__name__}: {e!r}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to generate response: {str(e)}")
+
+
+@router.post("/chat/stream")
+async def chat_stream(
+    body: ChatMessage,
+    supabase: Client = Depends(get_supabase),
+    user: User = Depends(get_current_user),
+):
+    """Stream AI assistant responses as Server-Sent Events."""
+    return StreamingResponse(
+        generate_response_stream(
+            supabase=supabase,
+            user_id=user.id,
+            username=user.username,
+            user_message=body.message,
+            conversation_history=body.conversation_history,
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

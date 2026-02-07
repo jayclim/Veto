@@ -15,18 +15,20 @@ interface Transaction {
     createdAt: string;
 }
 
-interface CategorySummary {
-    category: string;
-    totalSpent: number;
-    budgetLimit: number | null;
-    remaining: number | null;
+// Update interfaces to match new API
+interface RuleResult {
+    ruleName: string;
+    ruleType: string;
+    compliant: boolean | null;
+    message?: string;
+    // ... potentially other fields
 }
 
-interface DashboardSummary {
+interface DashboardCompliance {
     totalIncome: number;
     totalExpenses: number;
     net: number;
-    categories: CategorySummary[];
+    rules: RuleResult[];
 }
 
 function fmt(n: number): string {
@@ -40,11 +42,11 @@ function fmtDate(iso: string): string {
 export default function DashboardPage() {
     const { username } = useAuth();
     const [transactions, setTransactions] = useState<Transaction[]>([]);
-    const [dashboard, setDashboard] = useState<DashboardSummary | null>(null);
+    const [dashboard, setDashboard] = useState<DashboardCompliance | null>(null);
     const [loading, setLoading] = useState(true);
     const [showForm, setShowForm] = useState(false);
 
-    // Form state
+    // ... form state ...
     const [formDesc, setFormDesc] = useState('');
     const [formAmount, setFormAmount] = useState('');
     const [formCategory, setFormCategory] = useState(CATEGORIES[0].name);
@@ -54,12 +56,12 @@ export default function DashboardPage() {
     const refresh = useCallback(async () => {
         if (!username) return;
         try {
-            const [txs, dash] = await Promise.all([
+            const [txs, comp] = await Promise.all([
                 apiFetch<Transaction[]>('/transactions', {}, username),
-                apiFetch<DashboardSummary>('/budgets/dashboard', {}, username),
+                apiFetch<DashboardCompliance>('/budgets/compliance', {}, username),
             ]);
             setTransactions(txs);
-            setDashboard(dash);
+            setDashboard(comp);
         } catch (e) {
             console.error('Failed to fetch data:', e);
         } finally {
@@ -67,11 +69,11 @@ export default function DashboardPage() {
         }
     }, [username]);
 
+    // ... useEffects ...
     useEffect(() => {
         refresh();
     }, [refresh]);
 
-    // Listen for AI agent actions that require data refresh
     useEffect(() => {
         const handleDataRefresh = () => {
             refresh();
@@ -82,6 +84,7 @@ export default function DashboardPage() {
         };
     }, [refresh]);
 
+    // ... handleAdd and handleDelete ...
     const handleAdd = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!username || !formDesc.trim() || !formAmount) return;
@@ -123,8 +126,20 @@ export default function DashboardPage() {
         { icon: 'payments', label: 'Income', value: fmt(dashboard?.totalIncome ?? 0), color: 'text-emerald-accent' },
         { icon: 'credit_card', label: 'Expenses', value: fmt(dashboard?.totalExpenses ?? 0), color: 'text-crimson-accent' },
         { icon: 'savings', label: 'Net', value: fmt(dashboard?.net ?? 0), color: (dashboard?.net ?? 0) >= 0 ? 'text-emerald-accent' : 'text-crimson-accent' },
-        { icon: 'category', label: 'Categories', value: `${dashboard?.categories.length ?? 0}`, color: 'text-primary' },
+        { icon: 'rule', label: 'Active Rules', value: `${dashboard?.rules.length ?? 0}`, color: 'text-primary' },
     ];
+
+    // Compute spending by category from transactions
+    const spendingByCategory = transactions
+        .filter(t => t.transactionType === 'expense')
+        .reduce((acc, t) => {
+            acc[t.category] = (acc[t.category] || 0) + t.amount;
+            return acc;
+        }, {} as Record<string, number>);
+
+    const categoryList = Object.entries(spendingByCategory)
+        .map(([category, totalSpent]) => ({ category, totalSpent }))
+        .sort((a, b) => b.totalSpent - a.totalSpent);
 
     if (loading) {
         return (
@@ -183,10 +198,10 @@ export default function DashboardPage() {
                 <div className="col-span-1 flex flex-col gap-6">
                     <div className="glass-panel rounded-2xl p-6 flex-1 flex flex-col">
                         <h3 className="text-white font-medium mb-4">Spending by Category</h3>
-                        {dashboard && dashboard.categories.length > 0 ? (
-                            <div className="flex flex-col gap-3 flex-1">
-                                {dashboard.categories.map((cat) => {
-                                    const max = Math.max(...dashboard.categories.map(c => c.totalSpent), 1);
+                        {categoryList.length > 0 ? (
+                            <div className="flex flex-col gap-3 flex-1 h-[240px] overflow-y-auto pr-2 custom-scrollbar">
+                                {categoryList.map((cat) => {
+                                    const max = Math.max(...categoryList.map(c => c.totalSpent), 1);
                                     const pct = (cat.totalSpent / max) * 100;
                                     const style = getCategoryStyle(cat.category);
                                     return (

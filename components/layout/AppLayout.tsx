@@ -5,6 +5,7 @@ import Sidebar from './Sidebar';
 import ChatPanel from './ChatPanel';
 import Header from './Header';
 import LoginScreen from '@/components/LoginScreen';
+import OnboardingWizard from '@/components/OnboardingWizard';
 import { useAuth } from '@/context/AuthContext';
 
 interface AppLayoutProps {
@@ -12,11 +13,23 @@ interface AppLayoutProps {
 }
 
 export default function AppLayout({ children }: AppLayoutProps) {
-    const { username } = useAuth();
+    const { username, needsOnboarding, onboardingLoading } = useAuth();
     const [isChatVisible, setIsChatVisible] = useState(true);
 
     if (!username) {
         return <LoginScreen />;
+    }
+
+    if (onboardingLoading) {
+        return (
+            <div className="flex h-screen w-full items-center justify-center bg-slate-950 bg-glow-radial">
+                <div className="animate-pulse text-slate-400 text-sm">Loading...</div>
+            </div>
+        );
+    }
+
+    if (needsOnboarding) {
+        return <OnboardingWizard />;
     }
 
     return (

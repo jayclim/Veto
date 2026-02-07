@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { sendChatMessage, ActionResult } from '@/lib/api';
+import { sendChatMessageStream, ActionResult, StreamEvent } from '@/lib/api';
 
 interface Message {
     id: string;
@@ -40,8 +40,6 @@ export default function ChatPanel({ isVisible, onToggle }: ChatPanelProps) {
         switch (action.type) {
             case 'add_transaction':
                 return `Added transaction: ${action.details?.description} - $${action.details?.amount}`;
-            case 'create_budget_category':
-                return `Created budget category: ${action.details?.name} ($${action.details?.monthly_limit}/month)`;
             case 'delete_transaction':
                 return `Deleted transaction successfully`;
             default:
@@ -60,52 +58,75 @@ export default function ChatPanel({ isVisible, onToggle }: ChatPanelProps) {
             timestamp: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }),
         };
 
+        const assistantMsgId = (Date.now() + 1).toString();
+
         setMessages((prev) => [...prev, userMessage]);
         setInput('');
         setIsTyping(true);
         setError(null);
 
         try {
-            // Build conversation history for context
             const conversationHistory = messages.slice(-10).map((m) => ({
                 role: m.role,
                 content: m.content,
             }));
 
-            const response = await sendChatMessage(input, conversationHistory, username);
+            let streamingStarted = false;
 
-            // Build response content with action confirmations
-            let content = response.content;
-            if (response.actions && response.actions.length > 0) {
-                const actionMessages = response.actions.map(formatActionConfirmation).join('\n');
-                if (actionMessages) {
-                    content = content + '\n\n' + actionMessages;
+            await sendChatMessageStream(input, conversationHistory, username, (event: StreamEvent) => {
+                if (event.type === 'token' && event.content) {
+                    if (!streamingStarted) {
+                        // First token: create the assistant message and hide typing dots
+                        streamingStarted = true;
+                        setIsTyping(false);
+                        setMessages((prev) => [
+                            ...prev,
+                            {
+                                id: assistantMsgId,
+                                role: 'assistant' as const,
+                                content: event.content!,
+                                timestamp: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }),
+                            },
+                        ]);
+                    } else {
+                        // Subsequent tokens: append to existing message
+                        setMessages((prev) =>
+                            prev.map((msg) =>
+                                msg.id === assistantMsgId
+                                    ? { ...msg, content: msg.content + event.content }
+                                    : msg
+                            )
+                        );
+                    }
+                } else if (event.type === 'actions' && event.actions) {
+                    const actionMessages = event.actions.map(formatActionConfirmation).join('\n');
+                    if (actionMessages) {
+                        setMessages((prev) =>
+                            prev.map((msg) =>
+                                msg.id === assistantMsgId
+                                    ? { ...msg, content: msg.content + '\n\n' + actionMessages }
+                                    : msg
+                            )
+                        );
+                    }
+                    // Trigger dashboard refresh for any successful actions
+                    if (event.actions.some((a) => a.success)) {
+                        window.dispatchEvent(new CustomEvent('veto-data-refresh'));
+                    }
                 }
-
-                // Trigger dashboard refresh for any successful actions
-                if (response.actions.some(a => a.success)) {
-                    window.dispatchEvent(new CustomEvent('veto-data-refresh'));
-                }
-            }
-
-            const assistantMessage: Message = {
-                id: response.id,
-                role: 'assistant',
-                content: content,
-                timestamp: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }),
-            };
-            setMessages((prev) => [...prev, assistantMessage]);
+                // type === 'done' — nothing extra needed
+            });
         } catch (err) {
             console.error('Chat error:', err);
             setError('Failed to get response. Please try again.');
-            // Add error message to chat
-            const errorMessage: Message = {
-                id: (Date.now() + 1).toString(),
-                role: 'assistant',
-                content: "I'm sorry, I encountered an error processing your request. Please try again.",
-                timestamp: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }),
-            };
-            setMessages((prev) => [...prev, errorMessage]);
+            // Update the streaming message with error text
+            setMessages((prev) =>
+                prev.map((msg) =>
+                    msg.id === assistantMsgId
+                        ? { ...msg, content: "I'm sorry, I encountered an error processing your request. Please try again." }
+                        : msg
+                )
+            );
         } finally {
             setIsTyping(false);
         }
@@ -175,7 +196,7 @@ export default function ChatPanel({ isVisible, onToggle }: ChatPanelProps) {
                             <div
                                 className={`p-3 rounded-2xl ${message.role === 'assistant'
                                     ? 'bg-slate-800/80 rounded-tl-none border border-white/5 shadow-sm'
-                                    : 'bg-electric-blue rounded-tr-none shadow-lg shadow-blue-500/20'
+                                    : 'bg-primary rounded-tr-none shadow-lg shadow-blue-500/20'
                                     }`}
                             >
                                 <p
