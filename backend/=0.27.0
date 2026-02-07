@@ -1,0 +1,7 @@
+Requirement already satisfied: httpx in /opt/homebrew/lib/python3.9/site-packages (0.28.1)
+Requirement already satisfied: anyio in /opt/homebrew/lib/python3.9/site-packages (from httpx) (3.6.1)
+Requirement already satisfied: certifi in /opt/homebrew/lib/python3.9/site-packages (from httpx) (2022.6.15)
+Requirement already satisfied: httpcore==1.* in /opt/homebrew/lib/python3.9/site-packages (from httpx) (1.0.9)
+Requirement already satisfied: idna in /opt/homebrew/lib/python3.9/site-packages (from httpx) (3.3)
+Requirement already satisfied: h11>=0.16 in /opt/homebrew/lib/python3.9/site-packages (from httpcore==1.*->httpx) (0.16.0)
+Requirement already satisfied: sniffio>=1.1 in /opt/homebrew/lib/python3.9/site-packages (from anyio->httpx) (1.2.0)

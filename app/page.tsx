@@ -71,6 +71,17 @@ export default function DashboardPage() {
         refresh();
     }, [refresh]);
 
+    // Listen for AI agent actions that require data refresh
+    useEffect(() => {
+        const handleDataRefresh = () => {
+            refresh();
+        };
+        window.addEventListener('veto-data-refresh', handleDataRefresh);
+        return () => {
+            window.removeEventListener('veto-data-refresh', handleDataRefresh);
+        };
+    }, [refresh]);
+
     const handleAdd = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!username || !formDesc.trim() || !formAmount) return;

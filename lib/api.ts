@@ -21,3 +21,42 @@ export async function apiFetch<T>(
 
   return res.json();
 }
+
+// Chat API types and function
+export interface ChatRequest {
+  message: string;
+  conversationHistory?: Array<{ role: string; content: string }>;
+}
+
+export interface ActionResult {
+  type: string;
+  success: boolean;
+  details?: Record<string, unknown>;
+  error?: string;
+}
+
+export interface ChatResponse {
+  id: string;
+  role: string;
+  content: string;
+  timestamp: string;
+  actions: ActionResult[];
+}
+
+export async function sendChatMessage(
+  message: string,
+  conversationHistory: Array<{ role: string; content: string }>,
+  username: string
+): Promise<ChatResponse> {
+  return apiFetch<ChatResponse>(
+    "/chat",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        message,
+        conversationHistory,
+      }),
+    },
+    username
+  );
+}

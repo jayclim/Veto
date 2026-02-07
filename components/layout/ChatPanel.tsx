@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
+import { sendChatMessage, ActionResult } from '@/lib/api';
 
 interface Message {
     id: string;
@@ -23,16 +24,34 @@ export default function ChatPanel({ isVisible, onToggle }: ChatPanelProps) {
             id: '1',
             role: 'assistant',
             content:
-                'Welcome! I can help you understand your spending patterns and manage your budget. Try asking me about your recent transactions or spending breakdown.',
+                'Welcome! I can help you understand your spending patterns and manage your budget. Try asking me about your recent transactions or say "add a $50 expense for groceries" to add a transaction.',
             timestamp: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }),
         },
     ]);
     const [input, setInput] = useState('');
-    const [isTyping, setIsTyping] = useState(true);
+    const [isTyping, setIsTyping] = useState(false);
+    const [error, setError] = useState<string | null>(null);
 
-    const handleSubmit = (e: React.FormEvent) => {
+    const formatActionConfirmation = (action: ActionResult): string => {
+        if (!action.success) {
+            return `Failed to ${action.type.replace(/_/g, ' ')}: ${action.error || 'Unknown error'}`;
+        }
+
+        switch (action.type) {
+            case 'add_transaction':
+                return `Added transaction: ${action.details?.description} - $${action.details?.amount}`;
+            case 'create_budget_category':
+                return `Created budget category: ${action.details?.name} ($${action.details?.monthly_limit}/month)`;
+            case 'delete_transaction':
+                return `Deleted transaction successfully`;
+            default:
+                return `Action completed: ${action.type}`;
+        }
+    };
+
+    const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!input.trim()) return;
+        if (!input.trim() || !username) return;
 
         const userMessage: Message = {
             id: Date.now().toString(),
@@ -44,19 +63,52 @@ export default function ChatPanel({ isVisible, onToggle }: ChatPanelProps) {
         setMessages((prev) => [...prev, userMessage]);
         setInput('');
         setIsTyping(true);
+        setError(null);
 
-        // Simulate AI response
-        setTimeout(() => {
+        try {
+            // Build conversation history for context
+            const conversationHistory = messages.slice(-10).map((m) => ({
+                role: m.role,
+                content: m.content,
+            }));
+
+            const response = await sendChatMessage(input, conversationHistory, username);
+
+            // Build response content with action confirmations
+            let content = response.content;
+            if (response.actions && response.actions.length > 0) {
+                const actionMessages = response.actions.map(formatActionConfirmation).join('\n');
+                if (actionMessages) {
+                    content = content + '\n\n' + actionMessages;
+                }
+
+                // Trigger dashboard refresh for any successful actions
+                if (response.actions.some(a => a.success)) {
+                    window.dispatchEvent(new CustomEvent('veto-data-refresh'));
+                }
+            }
+
             const assistantMessage: Message = {
-                id: (Date.now() + 1).toString(),
+                id: response.id,
                 role: 'assistant',
-                content:
-                    "I'm analyzing your request. This is a placeholder response - connect me to a real AI backend for actual insights!",
+                content: content,
                 timestamp: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }),
             };
             setMessages((prev) => [...prev, assistantMessage]);
+        } catch (err) {
+            console.error('Chat error:', err);
+            setError('Failed to get response. Please try again.');
+            // Add error message to chat
+            const errorMessage: Message = {
+                id: (Date.now() + 1).toString(),
+                role: 'assistant',
+                content: "I'm sorry, I encountered an error processing your request. Please try again.",
+                timestamp: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }),
+            };
+            setMessages((prev) => [...prev, errorMessage]);
+        } finally {
             setIsTyping(false);
-        }, 2000);
+        }
     };
 
     if (!isVisible) {
@@ -98,7 +150,7 @@ export default function ChatPanel({ isVisible, onToggle }: ChatPanelProps) {
                 {/* Date Separator */}
                 <div className="flex items-center justify-center py-4">
                     <span className="text-[10px] text-slate-500 bg-slate-900/50 px-3 py-1 rounded-full border border-white/5">
-                        Today, Oct 25
+                        Today
                     </span>
                 </div>
 
@@ -127,7 +179,7 @@ export default function ChatPanel({ isVisible, onToggle }: ChatPanelProps) {
                                     }`}
                             >
                                 <p
-                                    className={`text-xs leading-relaxed ${message.role === 'assistant' ? 'text-slate-300' : 'text-white'
+                                    className={`text-xs leading-relaxed whitespace-pre-wrap ${message.role === 'assistant' ? 'text-slate-300' : 'text-white'
                                         }`}
                                 >
                                     {message.content}
@@ -166,6 +218,13 @@ export default function ChatPanel({ isVisible, onToggle }: ChatPanelProps) {
                         </div>
                     </div>
                 )}
+
+                {/* Error Display */}
+                {error && (
+                    <div className="text-red-400 text-xs text-center py-2">
+                        {error}
+                    </div>
+                )}
             </div>
 
             {/* Input */}
@@ -177,10 +236,12 @@ export default function ChatPanel({ isVisible, onToggle }: ChatPanelProps) {
                         placeholder="Ask Veto AI..."
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
+                        disabled={isTyping}
                     />
                     <button
                         type="submit"
-                        className="absolute right-2 top-2 p-1 text-primary hover:text-white transition-colors rounded-lg"
+                        className="absolute right-2 top-2 p-1 text-primary hover:text-white transition-colors rounded-lg disabled:opacity-50"
+                        disabled={isTyping || !input.trim()}
                     >
                         <span className="material-symbols-outlined text-lg">send</span>
                     </button>
