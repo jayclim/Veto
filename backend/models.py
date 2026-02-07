@@ -3,8 +3,7 @@ from enum import Enum
 from typing import List, Optional
 from uuid import uuid4
 
-from pydantic import ConfigDict
-from sqlmodel import Field, SQLModel
+from pydantic import BaseModel, ConfigDict
 
 
 def _generate_id() -> str:
@@ -16,20 +15,14 @@ def _camel_alias(field_name: str) -> str:
     return parts[0] + "".join(w.capitalize() for w in parts[1:])
 
 
-class CamelModel(SQLModel):
+class CamelModel(BaseModel):
     model_config = ConfigDict(
         alias_generator=_camel_alias,
         populate_by_name=True,
     )
 
 
-# ── Table Models (DB) ─────────────────────────────────────────────
-
-
-class User(SQLModel, table=True):
-    id: str = Field(default_factory=_generate_id, primary_key=True)
-    username: str = Field(unique=True, index=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+# ── Enums ────────────────────────────────────────────────────────
 
 
 class TransactionType(str, Enum):
@@ -37,43 +30,23 @@ class TransactionType(str, Enum):
     expense = "expense"
 
 
-class Transaction(SQLModel, table=True):
-    id: str = Field(default_factory=_generate_id, primary_key=True)
-    user_id: str = Field(foreign_key="user.id", index=True)
-    amount: float
-    description: str
-    category: str = Field(default="Uncategorized")
-    transaction_type: TransactionType = Field(default=TransactionType.expense)
-    date: datetime = Field(default_factory=datetime.utcnow)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-
-
-class BudgetCategory(SQLModel, table=True):
-    id: str = Field(default_factory=_generate_id, primary_key=True)
-    user_id: str = Field(foreign_key="user.id", index=True)
-    name: str
-    monthly_limit: float
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-
-
 class RuleType(str, Enum):
-    percentage_allocation = "percentage_allocation"  # e.g., 50/30/20
-    category_limit = "category_limit"               # max spend per category
-    savings_goal = "savings_goal"                   # save X per month
-    spending_alert = "spending_alert"               # alert when threshold hit
+    percentage_allocation = "percentage_allocation"
+    category_limit = "category_limit"
+    savings_goal = "savings_goal"
+    spending_alert = "spending_alert"
 
 
-class BudgetRule(SQLModel, table=True):
-    id: str = Field(default_factory=_generate_id, primary_key=True)
-    user_id: str = Field(foreign_key="user.id", index=True)
-    rule_type: RuleType
-    name: str  # e.g., "50/30/20 Rule", "Groceries Alert"
-    config: str  # JSON string with rule-specific configuration
-    is_active: bool = Field(default=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+# ── User Model ───────────────────────────────────────────────────
 
 
-# ── Public Models (Pydantic schemas for API) ──────────────────────
+class User(BaseModel):
+    id: str
+    username: str
+    created_at: datetime
+
+
+# ── Public Models (Pydantic schemas for API) ─────────────────────
 
 
 class TransactionCreate(CamelModel):

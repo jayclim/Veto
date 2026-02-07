@@ -3,9 +3,8 @@ from typing import Optional
 from datetime import datetime
 
 from mcp.server.fastmcp import FastMCP, Context
-from sqlmodel import Session, create_engine, select
 
-from database import engine
+from database import get_supabase
 from models import (
     TransactionType,
     TransactionCreate,
@@ -17,9 +16,6 @@ from services import transaction_service, budget_service, budget_rule_service
 
 # Initialize FastMCP server
 mcp = FastMCP("Veto Budget Agent")
-
-def get_session():
-    return Session(engine)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SERVER TOOLS (require database access)
@@ -36,7 +32,7 @@ def add_transaction(
 ) -> str:
     """
     Record a new financial transaction (expense or income).
-    
+
     Args:
         amount: The monetary value of the transaction.
         description: A brief description of what the transaction was for.
@@ -51,16 +47,16 @@ def add_transaction(
         except ValueError:
             return f"Error: Invalid transaction type '{transaction_type}'. Must be 'expense' or 'income'."
 
-        with get_session() as session:
-            tx_data = TransactionCreate(
-                amount=amount,
-                description=description,
-                category=category,
-                transaction_type=type_enum,
-                date=date
-            )
-            result = transaction_service.add_transaction(session, username, tx_data)
-            return f"Transaction added: {result.description} ({result.amount}) - ID: {result.id}"
+        supabase = get_supabase()
+        tx_data = TransactionCreate(
+            amount=amount,
+            description=description,
+            category=category,
+            transaction_type=type_enum,
+            date=date
+        )
+        result = transaction_service.add_transaction(supabase, username, tx_data)
+        return f"Transaction added: {result.description} ({result.amount}) - ID: {result.id}"
     except Exception as e:
         return f"Error adding transaction: {str(e)}"
 
@@ -68,12 +64,12 @@ def add_transaction(
 def delete_transaction(transaction_id: str, username: str = "default_user") -> str:
     """Delete a transaction by its ID."""
     try:
-        with get_session() as session:
-            success = transaction_service.delete_transaction(session, username, transaction_id)
-            if success:
-                return f"Transaction {transaction_id} deleted successfully."
-            else:
-                return f"Transaction {transaction_id} not found or access denied."
+        supabase = get_supabase()
+        success = transaction_service.delete_transaction(supabase, username, transaction_id)
+        if success:
+            return f"Transaction {transaction_id} deleted successfully."
+        else:
+            return f"Transaction {transaction_id} not found or access denied."
     except Exception as e:
         return f"Error deleting transaction: {str(e)}"
 
@@ -93,25 +89,25 @@ def get_transactions(
             except ValueError:
                 return f"Error: Invalid transaction type '{transaction_type}'."
 
-        with get_session() as session:
-            txs = transaction_service.get_transactions(
-                session, 
-                username, 
-                category=category, 
-                transaction_type=type_enum
-            )
-            
-            if not txs:
-                return "No transactions found."
-            
-            txs = txs[:limit]
-            
-            output = [f"Found {len(txs)} transactions:"]
-            for tx in txs:
-                date_str = tx.date.strftime("%Y-%m-%d") if tx.date else "N/A"
-                output.append(f"- [{date_str}] {tx.description}: ${tx.amount} ({tx.category}) [{tx.transaction_type.value}] ID: {tx.id}")
-            
-            return "\n".join(output)
+        supabase = get_supabase()
+        txs = transaction_service.get_transactions(
+            supabase,
+            username,
+            category=category,
+            transaction_type=type_enum
+        )
+
+        if not txs:
+            return "No transactions found."
+
+        txs = txs[:limit]
+
+        output = [f"Found {len(txs)} transactions:"]
+        for tx in txs:
+            date_str = tx.date.strftime("%Y-%m-%d") if tx.date else "N/A"
+            output.append(f"- [{date_str}] {tx.description}: ${tx.amount} ({tx.category}) [{tx.transaction_type.value}] ID: {tx.id}")
+
+        return "\n".join(output)
     except Exception as e:
         return f"Error fetching transactions: {str(e)}"
 
@@ -123,10 +119,10 @@ def create_budget_category(
 ) -> str:
     """Create a new budget category with a monthly spending limit."""
     try:
-        with get_session() as session:
-            cat_data = BudgetCategoryCreate(name=name, monthly_limit=monthly_limit)
-            result = budget_service.create_category(session, username, cat_data)
-            return f"Category '{result.name}' created with limit ${result.monthly_limit}."
+        supabase = get_supabase()
+        cat_data = BudgetCategoryCreate(name=name, monthly_limit=monthly_limit)
+        result = budget_service.create_category(supabase, username, cat_data)
+        return f"Category '{result.name}' created with limit ${result.monthly_limit}."
     except Exception as e:
         return f"Error creating category: {str(e)}"
 
@@ -134,15 +130,15 @@ def create_budget_category(
 def get_budget_categories(username: str = "default_user") -> str:
     """List all budget categories and their limits."""
     try:
-        with get_session() as session:
-            cats = budget_service.get_categories(session, username)
-            if not cats:
-                return "No categories set."
-            
-            output = ["Budget Categories:"]
-            for c in cats:
-                output.append(f"- {c.name}: ${c.monthly_limit}/month")
-            return "\n".join(output)
+        supabase = get_supabase()
+        cats = budget_service.get_categories(supabase, username)
+        if not cats:
+            return "No categories set."
+
+        output = ["Budget Categories:"]
+        for c in cats:
+            output.append(f"- {c.name}: ${c.monthly_limit}/month")
+        return "\n".join(output)
     except Exception as e:
         return f"Error fetching categories: {str(e)}"
 
@@ -150,24 +146,24 @@ def get_budget_categories(username: str = "default_user") -> str:
 def get_dashboard_summary(username: str = "default_user") -> str:
     """Get a financial dashboard summary including income, expenses, and category breakdowns."""
     try:
-        with get_session() as session:
-            summary = budget_service.get_dashboard_summary(session, username)
-            
-            lines = [
-                "**Dashboard Summary**",
-                f"Total Income: ${summary.total_income:.2f}",
-                f"Total Expenses: ${summary.total_expenses:.2f}",
-                f"Net: ${summary.net:.2f}",
-                "",
-                "**Category Breakdown:**"
-            ]
-            
-            for cat in summary.categories:
-                limit_str = f" / ${cat.budget_limit}" if cat.budget_limit else ""
-                remaining_str = f" (Remaining: ${cat.remaining:.2f})" if cat.remaining is not None else ""
-                lines.append(f"- {cat.category}: ${cat.total_spent:.2f}{limit_str}{remaining_str}")
-                
-            return "\n".join(lines)
+        supabase = get_supabase()
+        summary = budget_service.get_dashboard_summary(supabase, username)
+
+        lines = [
+            "**Dashboard Summary**",
+            f"Total Income: ${summary.total_income:.2f}",
+            f"Total Expenses: ${summary.total_expenses:.2f}",
+            f"Net: ${summary.net:.2f}",
+            "",
+            "**Category Breakdown:**"
+        ]
+
+        for cat in summary.categories:
+            limit_str = f" / ${cat.budget_limit}" if cat.budget_limit else ""
+            remaining_str = f" (Remaining: ${cat.remaining:.2f})" if cat.remaining is not None else ""
+            lines.append(f"- {cat.category}: ${cat.total_spent:.2f}{limit_str}{remaining_str}")
+
+        return "\n".join(lines)
     except Exception as e:
         return f"Error fetching dashboard: {str(e)}"
 
@@ -182,7 +178,7 @@ def create_budget_rule(
 ) -> str:
     """
     Create a new budget rule.
-    
+
     Args:
         rule_type: One of "percentage_allocation", "category_limit", "savings_goal", "spending_alert"
         name: A friendly name for the rule (e.g., "50/30/20 Rule")
@@ -206,14 +202,14 @@ def create_budget_rule(
         except json.JSONDecodeError:
             return "Error: config must be a valid JSON string."
 
-        with get_session() as session:
-            rule_data = BudgetRuleCreate(
-                rule_type=type_enum,
-                name=name,
-                config=config
-            )
-            result = budget_rule_service.create_rule(session, username, rule_data)
-            return f"Budget rule '{result.name}' created successfully (ID: {result.id})."
+        supabase = get_supabase()
+        rule_data = BudgetRuleCreate(
+            rule_type=type_enum,
+            name=name,
+            config=config
+        )
+        result = budget_rule_service.create_rule(supabase, username, rule_data)
+        return f"Budget rule '{result.name}' created successfully (ID: {result.id})."
     except Exception as e:
         return f"Error creating budget rule: {str(e)}"
 
@@ -221,16 +217,16 @@ def create_budget_rule(
 def get_budget_rules(username: str = "default_user") -> str:
     """List all active budget rules for a user."""
     try:
-        with get_session() as session:
-            rules = budget_rule_service.get_rules(session, username)
-            if not rules:
-                return "No budget rules set."
-            
-            output = ["Active Budget Rules:"]
-            for r in rules:
-                output.append(f"- [{r.rule_type.value}] {r.name} (ID: {r.id})")
-                output.append(f"  Config: {r.config}")
-            return "\n".join(output)
+        supabase = get_supabase()
+        rules = budget_rule_service.get_rules(supabase, username)
+        if not rules:
+            return "No budget rules set."
+
+        output = ["Active Budget Rules:"]
+        for r in rules:
+            output.append(f"- [{r.rule_type.value}] {r.name} (ID: {r.id})")
+            output.append(f"  Config: {r.config}")
+        return "\n".join(output)
     except Exception as e:
         return f"Error fetching budget rules: {str(e)}"
 
@@ -238,12 +234,12 @@ def get_budget_rules(username: str = "default_user") -> str:
 def delete_budget_rule(rule_id: str, username: str = "default_user") -> str:
     """Delete a budget rule by its ID."""
     try:
-        with get_session() as session:
-            success = budget_rule_service.delete_rule(session, username, rule_id)
-            if success:
-                return f"Budget rule {rule_id} deleted successfully."
-            else:
-                return f"Budget rule {rule_id} not found or access denied."
+        supabase = get_supabase()
+        success = budget_rule_service.delete_rule(supabase, username, rule_id)
+        if success:
+            return f"Budget rule {rule_id} deleted successfully."
+        else:
+            return f"Budget rule {rule_id} not found or access denied."
     except Exception as e:
         return f"Error deleting budget rule: {str(e)}"
 
@@ -254,32 +250,32 @@ def check_rule_compliance(username: str = "default_user") -> str:
     Returns compliance status for each rule.
     """
     try:
-        with get_session() as session:
-            result = budget_rule_service.check_rule_compliance(session, username)
-            
-            if result.get("status") == "no_rules":
-                return result.get("message", "No active budget rules found.")
-            
-            lines = ["**Budget Rule Compliance Report**", ""]
-            for rule in result.get("rules", []):
-                status = "✅ Compliant" if rule.get("compliant") else "❌ Not Compliant"
-                if rule.get("compliant") is None:
-                    status = "⚠️ Cannot determine"
-                lines.append(f"**{rule.get('rule_name')}** ({rule.get('rule_type')}): {status}")
-                
-                # Add details based on rule type
-                if rule.get("rule_type") == "percentage_allocation":
-                    lines.append(f"  Target savings: {rule.get('target_savings_pct')}% | Actual: {rule.get('actual_savings_pct')}%")
-                elif rule.get("rule_type") == "category_limit":
-                    lines.append(f"  {rule.get('category')}: ${rule.get('spent')} / ${rule.get('limit')}")
-                elif rule.get("rule_type") == "savings_goal":
-                    lines.append(f"  Saved: ${rule.get('saved')} / Goal: ${rule.get('goal')}")
-                elif rule.get("rule_type") == "spending_alert":
-                    alert = "🔔 ALERT TRIGGERED" if rule.get("alert_triggered") else "No alert"
-                    lines.append(f"  {rule.get('category')}: ${rule.get('spent')} (threshold: ${rule.get('threshold')}) - {alert}")
-                lines.append("")
-            
-            return "\n".join(lines)
+        supabase = get_supabase()
+        result = budget_rule_service.check_rule_compliance(supabase, username)
+
+        if result.get("status") == "no_rules":
+            return result.get("message", "No active budget rules found.")
+
+        lines = ["**Budget Rule Compliance Report**", ""]
+        for rule in result.get("rules", []):
+            status = "Compliant" if rule.get("compliant") else "Not Compliant"
+            if rule.get("compliant") is None:
+                status = "Cannot determine"
+            lines.append(f"**{rule.get('rule_name')}** ({rule.get('rule_type')}): {status}")
+
+            # Add details based on rule type
+            if rule.get("rule_type") == "percentage_allocation":
+                lines.append(f"  Target savings: {rule.get('target_savings_pct')}% | Actual: {rule.get('actual_savings_pct')}%")
+            elif rule.get("rule_type") == "category_limit":
+                lines.append(f"  {rule.get('category')}: ${rule.get('spent')} / ${rule.get('limit')}")
+            elif rule.get("rule_type") == "savings_goal":
+                lines.append(f"  Saved: ${rule.get('saved')} / Goal: ${rule.get('goal')}")
+            elif rule.get("rule_type") == "spending_alert":
+                alert = "ALERT TRIGGERED" if rule.get("alert_triggered") else "No alert"
+                lines.append(f"  {rule.get('category')}: ${rule.get('spent')} (threshold: ${rule.get('threshold')}) - {alert}")
+            lines.append("")
+
+        return "\n".join(lines)
     except Exception as e:
         return f"Error checking compliance: {str(e)}"
 
@@ -290,43 +286,43 @@ def get_spending_insights(username: str = "default_user") -> str:
     Useful for providing proactive budget advice.
     """
     try:
-        with get_session() as session:
-            summary = budget_service.get_dashboard_summary(session, username)
-            
-            insights = []
-            
-            # Overall health
-            if summary.total_income > 0:
-                savings_rate = ((summary.total_income - summary.total_expenses) / summary.total_income) * 100
-                if savings_rate >= 20:
-                    insights.append(f"✅ Great savings rate of {savings_rate:.1f}%!")
-                elif savings_rate >= 10:
-                    insights.append(f"⚠️ Savings rate is {savings_rate:.1f}%. Consider increasing to 20%.")
-                elif savings_rate > 0:
-                    insights.append(f"⚠️ Low savings rate of {savings_rate:.1f}%. Try to save more.")
-                else:
-                    insights.append(f"❌ Negative savings rate ({savings_rate:.1f}%). Spending exceeds income!")
+        supabase = get_supabase()
+        summary = budget_service.get_dashboard_summary(supabase, username)
+
+        insights = []
+
+        # Overall health
+        if summary.total_income > 0:
+            savings_rate = ((summary.total_income - summary.total_expenses) / summary.total_income) * 100
+            if savings_rate >= 20:
+                insights.append(f"Great savings rate of {savings_rate:.1f}%!")
+            elif savings_rate >= 10:
+                insights.append(f"Savings rate is {savings_rate:.1f}%. Consider increasing to 20%.")
+            elif savings_rate > 0:
+                insights.append(f"Low savings rate of {savings_rate:.1f}%. Try to save more.")
             else:
-                insights.append("ℹ️ No income recorded yet.")
-            
-            # Category analysis
+                insights.append(f"Negative savings rate ({savings_rate:.1f}%). Spending exceeds income!")
+        else:
+            insights.append("No income recorded yet.")
+
+        # Category analysis
+        if summary.categories:
+            # Find categories over budget
+            over_budget = [c for c in summary.categories if c.remaining is not None and c.remaining < 0]
+            if over_budget:
+                for c in over_budget:
+                    insights.append(f"{c.category} is ${abs(c.remaining):.2f} over budget!")
+
+            # Find top spending category
             if summary.categories:
-                # Find categories over budget
-                over_budget = [c for c in summary.categories if c.remaining is not None and c.remaining < 0]
-                if over_budget:
-                    for c in over_budget:
-                        insights.append(f"🚨 {c.category} is ${abs(c.remaining):.2f} over budget!")
-                
-                # Find top spending category
-                if summary.categories:
-                    top_cat = max(summary.categories, key=lambda x: x.total_spent)
-                    if top_cat.total_spent > 0:
-                        insights.append(f"💰 Highest spending: {top_cat.category} (${top_cat.total_spent:.2f})")
-            
-            if not insights:
-                return "No spending data available yet."
-            
-            return "**Spending Insights**\n" + "\n".join(insights)
+                top_cat = max(summary.categories, key=lambda x: x.total_spent)
+                if top_cat.total_spent > 0:
+                    insights.append(f"Highest spending: {top_cat.category} (${top_cat.total_spent:.2f})")
+
+        if not insights:
+            return "No spending data available yet."
+
+        return "**Spending Insights**\n" + "\n".join(insights)
     except Exception as e:
         return f"Error generating insights: {str(e)}"
 
@@ -391,19 +387,19 @@ def check_budget_for_purchase(
     """
     Check if a purchase is within budget.
     LOCAL TOOL - no database access, pure calculation.
-    
+
     Args:
         budget_limit: The monthly budget limit for this category.
         amount_spent: How much has already been spent in this category.
         purchase_amount: The cost of the proposed purchase.
         category: The category name (for display purposes).
-    
+
     Returns:
         A recommendation on whether to proceed with the purchase.
     """
     remaining = budget_limit - amount_spent
     after_purchase = remaining - purchase_amount
-    
+
     result = {
         "category": category,
         "budget_limit": budget_limit,
@@ -412,7 +408,7 @@ def check_budget_for_purchase(
         "purchase_amount": purchase_amount,
         "remaining_after": after_purchase,
     }
-    
+
     if purchase_amount > remaining:
         result["recommendation"] = "DENY"
         result["reason"] = f"This purchase of ${purchase_amount:.2f} would exceed your {category} budget by ${abs(after_purchase):.2f}."
@@ -422,7 +418,7 @@ def check_budget_for_purchase(
     else:
         result["recommendation"] = "APPROVE"
         result["reason"] = f"This purchase is within budget. You'll have ${after_purchase:.2f} remaining."
-    
+
     return json.dumps(result, indent=2)
 
 @mcp.tool()
@@ -433,13 +429,13 @@ def suggest_budget_allocation(
     """
     Suggest budget allocations based on income and chosen method.
     LOCAL TOOL - no database access.
-    
+
     Args:
         monthly_income: The user's monthly income.
         method: Budget method to use ("50/30/20", "80/20", "pay_yourself_first").
     """
     allocations = {}
-    
+
     if method == "50/30/20":
         allocations = {
             "needs": {"percent": 50, "amount": monthly_income * 0.50},
@@ -452,14 +448,13 @@ def suggest_budget_allocation(
             "savings": {"percent": 20, "amount": monthly_income * 0.20},
         }
     elif method == "pay_yourself_first":
-        # Default to 25% savings for pay yourself first
         allocations = {
             "savings": {"percent": 25, "amount": monthly_income * 0.25},
             "remainder": {"percent": 75, "amount": monthly_income * 0.75},
         }
     else:
         return json.dumps({"error": f"Unknown method: {method}. Try '50/30/20', '80/20', or 'pay_yourself_first'."})
-    
+
     result = {
         "monthly_income": monthly_income,
         "method": method,
@@ -478,7 +473,7 @@ def get_budget_health_score(
     """
     Calculate a 0-100 financial health score.
     LOCAL TOOL - no database access.
-    
+
     Args:
         total_income: Total monthly income.
         total_expenses: Total monthly expenses.
@@ -487,7 +482,7 @@ def get_budget_health_score(
         debt_to_income_ratio: Monthly debt payments / monthly income (0.0 to 1.0).
     """
     score = 50  # Start at neutral
-    
+
     # Savings rate impact (-20 to +30)
     if total_income > 0:
         savings_rate = (total_income - total_expenses) / total_income
@@ -499,14 +494,14 @@ def get_budget_health_score(
             score += 5
         else:
             score -= 20  # Spending more than earning
-    
+
     # Categories over budget (-15)
     score -= min(categories_over_budget * 5, 15)
-    
+
     # Emergency fund (+15)
     if has_emergency_fund:
         score += 15
-    
+
     # Debt-to-income ratio (-20 to 0)
     if debt_to_income_ratio > 0.50:
         score -= 20
@@ -514,10 +509,10 @@ def get_budget_health_score(
         score -= 10
     elif debt_to_income_ratio > 0.15:
         score -= 5
-    
+
     # Clamp score
     score = max(0, min(100, score))
-    
+
     # Determine grade
     if score >= 80:
         grade = "A"
@@ -534,7 +529,7 @@ def get_budget_health_score(
     else:
         grade = "F"
         message = "Critical financial situation. Seek professional advice."
-    
+
     result = {
         "score": score,
         "grade": grade,
@@ -558,7 +553,7 @@ def project_monthly_spending(
     """
     Project end-of-month spending based on current pace.
     LOCAL TOOL - no database access.
-    
+
     Args:
         current_day_of_month: What day of the month it is (1-31).
         days_in_month: Total days in this month (28-31).
@@ -567,11 +562,11 @@ def project_monthly_spending(
     """
     if current_day_of_month <= 0:
         return json.dumps({"error": "current_day_of_month must be positive"})
-    
+
     daily_rate = amount_spent_so_far / current_day_of_month
     projected_total = daily_rate * days_in_month
     difference = budget_limit - projected_total
-    
+
     result = {
         "current_day": current_day_of_month,
         "days_in_month": days_in_month,
@@ -581,7 +576,7 @@ def project_monthly_spending(
         "budget_limit": budget_limit,
         "projected_difference": round(difference, 2),
     }
-    
+
     if difference >= 0:
         result["status"] = "ON_TRACK"
         result["message"] = f"At current pace, you'll finish ${difference:.2f} under budget."
@@ -594,9 +589,8 @@ def project_monthly_spending(
             remaining_budget = budget_limit - amount_spent_so_far
             safe_daily = remaining_budget / remaining_days
             result["recommended_daily_limit"] = round(max(0, safe_daily), 2)
-    
+
     return json.dumps(result, indent=2)
 
 if __name__ == "__main__":
     mcp.run()
-

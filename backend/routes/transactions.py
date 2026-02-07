@@ -4,10 +4,10 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlmodel import Session
+from supabase import Client
 
 from auth import get_current_user
-from database import get_session
+from database import get_supabase
 from models import (
     TransactionCreate,
     TransactionPublic,
@@ -23,9 +23,9 @@ router = APIRouter(prefix="/transactions", tags=["transactions"])
 def create_transaction(
     body: TransactionCreate,
     user: User = Depends(get_current_user),
-    session: Session = Depends(get_session),
+    supabase: Client = Depends(get_supabase),
 ):
-    return transaction_service.add_transaction(session, user.id, body)
+    return transaction_service.add_transaction(supabase, user.id, body)
 
 
 @router.get("", response_model=List[TransactionPublic])
@@ -35,10 +35,10 @@ def list_transactions(
     start_date: Optional[datetime] = Query(None),
     end_date: Optional[datetime] = Query(None),
     user: User = Depends(get_current_user),
-    session: Session = Depends(get_session),
+    supabase: Client = Depends(get_supabase),
 ):
     return transaction_service.get_transactions(
-        session, user.id, category, transaction_type, start_date, end_date
+        supabase, user.id, category, transaction_type, start_date, end_date
     )
 
 
@@ -46,9 +46,9 @@ def list_transactions(
 def remove_transaction(
     transaction_id: str,
     user: User = Depends(get_current_user),
-    session: Session = Depends(get_session),
+    supabase: Client = Depends(get_supabase),
 ):
-    deleted = transaction_service.delete_transaction(session, user.id, transaction_id)
+    deleted = transaction_service.delete_transaction(supabase, user.id, transaction_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Transaction not found")
     return {"ok": True}

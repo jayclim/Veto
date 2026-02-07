@@ -1,16 +1,17 @@
 """Chat route — AI financial assistant endpoint."""
 from __future__ import annotations
 
+import traceback
 from datetime import datetime
 from typing import Optional, List, Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
-from sqlmodel import Session
+from supabase import Client
 
 from auth import get_current_user
-from database import get_session
+from database import get_supabase
 from models import User
 from services.agent_service import generate_response
 
@@ -23,7 +24,7 @@ def _camel_alias(field_name: str) -> str:
 class ChatMessage(BaseModel):
     """Incoming chat message from the user."""
     model_config = ConfigDict(alias_generator=_camel_alias, populate_by_name=True)
-    
+
     message: str
     conversation_history: Optional[List[dict]] = None
 
@@ -31,7 +32,7 @@ class ChatMessage(BaseModel):
 class ActionResult(BaseModel):
     """Result of an executed action."""
     model_config = ConfigDict(alias_generator=_camel_alias, populate_by_name=True)
-    
+
     type: str
     success: bool
     details: Optional[dict] = None
@@ -41,7 +42,7 @@ class ActionResult(BaseModel):
 class ChatResponse(BaseModel):
     """Response from the AI assistant."""
     model_config = ConfigDict(alias_generator=_camel_alias, populate_by_name=True)
-    
+
     id: str
     role: str = "assistant"
     content: str
@@ -55,21 +56,21 @@ router = APIRouter(tags=["chat"])
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
     body: ChatMessage,
-    session: Session = Depends(get_session),
+    supabase: Client = Depends(get_supabase),
     user: User = Depends(get_current_user),
 ):
     """Send a message to the AI financial assistant and get a response."""
     try:
         response_content, executed_actions = await generate_response(
-            session=session,
+            supabase=supabase,
             user_id=user.id,
             user_message=body.message,
             conversation_history=body.conversation_history,
         )
-        
+
         # Convert action dicts to ActionResult models
         action_results = [ActionResult(**action) for action in executed_actions]
-        
+
         return ChatResponse(
             id=uuid4().hex,
             role="assistant",
@@ -78,4 +79,6 @@ async def chat(
             actions=action_results,
         )
     except Exception as e:
+        print(f"[CHAT ERROR] {type(e).__name__}: {e!r}")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to generate response: {str(e)}")

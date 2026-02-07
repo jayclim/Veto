@@ -3,18 +3,19 @@ import { FAKE_TRANSACTIONS, FAKE_DASHBOARD } from "./fake-data";
 const API_BASE = "http://localhost:8000/api/v1";
 
 // ── Flip to `false` when the real backend is ready ──
-const USE_FAKE_DATA = true;
+// ── Flip to `false` when the real backend is ready ──
+const USE_FAKE_DATA = false;
 
 export async function apiFetch<T>(
   path: string,
   options: RequestInit = {},
   username: string
 ): Promise<T> {
-  if (USE_FAKE_DATA) {
-    // Simulate a small network delay so loading states still render
-    await new Promise((r) => setTimeout(r, 300));
-    return fakeFetch<T>(path, options);
-  }
+  //   if (USE_FAKE_DATA) {
+  //     // Simulate a small network delay so loading states still render
+  //     await new Promise((r) => setTimeout(r, 300));
+  //     // return fakeFetch<T>(path, options);
+  //   }
 
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,

@@ -1,72 +1,66 @@
-"""Budget business logic — MCP-ready standalone functions."""
+"""Budget business logic — Supabase-powered standalone functions."""
 from __future__ import annotations
 
-from typing import Dict, List
+from datetime import datetime
 
-from sqlmodel import Session, select, func
+from supabase import Client
 
 from models import (
-    BudgetCategory,
     BudgetCategoryCreate,
     BudgetCategoryPublic,
     CategorySummary,
     DashboardSummary,
-    Transaction,
     TransactionType,
+    _generate_id,
 )
 
 
 def create_category(
-    session: Session,
+    supabase: Client,
     user_id: str,
     data: BudgetCategoryCreate,
 ) -> BudgetCategoryPublic:
     """Create a budget category for a user."""
-    cat = BudgetCategory(
-        user_id=user_id,
-        name=data.name,
-        monthly_limit=data.monthly_limit,
-    )
-    session.add(cat)
-    session.commit()
-    session.refresh(cat)
-    return BudgetCategoryPublic.model_validate(cat)
+    row = {
+        "id": _generate_id(),
+        "user_id": user_id,
+        "name": data.name,
+        "monthly_limit": data.monthly_limit,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    result = supabase.table("budget_category").insert(row).execute()
+    return BudgetCategoryPublic(**result.data[0])
 
 
 def get_categories(
-    session: Session,
+    supabase: Client,
     user_id: str,
 ) -> list[BudgetCategoryPublic]:
     """List all budget categories for a user."""
-    rows = session.exec(
-        select(BudgetCategory).where(BudgetCategory.user_id == user_id)
-    ).all()
-    return [BudgetCategoryPublic.model_validate(r) for r in rows]
+    result = supabase.table("budget_category").select("*").eq("user_id", user_id).execute()
+    return [BudgetCategoryPublic(**r) for r in result.data]
 
 
 def get_dashboard_summary(
-    session: Session,
+    supabase: Client,
     user_id: str,
 ) -> DashboardSummary:
     """Build a dashboard summary: totals + per-category breakdown."""
-    transactions = session.exec(
-        select(Transaction).where(Transaction.user_id == user_id)
-    ).all()
+    tx_result = supabase.table("transaction").select("*").eq("user_id", user_id).execute()
+    transactions = tx_result.data
 
-    total_income = sum(t.amount for t in transactions if t.transaction_type == TransactionType.income)
-    total_expenses = sum(t.amount for t in transactions if t.transaction_type == TransactionType.expense)
+    total_income = sum(t["amount"] for t in transactions if t["transaction_type"] == TransactionType.income.value)
+    total_expenses = sum(t["amount"] for t in transactions if t["transaction_type"] == TransactionType.expense.value)
 
     # Per-category spending
     expense_by_cat: dict[str, float] = {}
     for t in transactions:
-        if t.transaction_type == TransactionType.expense:
-            expense_by_cat[t.category] = expense_by_cat.get(t.category, 0) + t.amount
+        if t["transaction_type"] == TransactionType.expense.value:
+            expense_by_cat[t["category"]] = expense_by_cat.get(t["category"], 0) + t["amount"]
 
     # Budget limits lookup
-    budgets = session.exec(
-        select(BudgetCategory).where(BudgetCategory.user_id == user_id)
-    ).all()
-    limit_map = {b.name: b.monthly_limit for b in budgets}
+    budget_result = supabase.table("budget_category").select("*").eq("user_id", user_id).execute()
+    limit_map = {b["name"]: b["monthly_limit"] for b in budget_result.data}
 
     categories: list[CategorySummary] = []
     all_cats = set(expense_by_cat.keys()) | set(limit_map.keys())

@@ -1,14 +1,19 @@
-from sqlmodel import SQLModel, Session, create_engine
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+from supabase import create_client, Client
 
-DATABASE_URL = "sqlite:///./veto.db"
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-engine = create_engine(DATABASE_URL, echo=False, connect_args={"check_same_thread": False})
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+
+_client: Client | None = None
 
 
-def init_db() -> None:
-    SQLModel.metadata.create_all(engine)
-
-
-def get_session():
-    with Session(engine) as session:
-        yield session
+def get_supabase() -> Client:
+    """Return a Supabase client singleton."""
+    global _client
+    if _client is None:
+        _client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    return _client

@@ -1,60 +1,57 @@
-"""Transaction business logic — MCP-ready standalone functions."""
+"""Transaction business logic — Supabase-powered standalone functions."""
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional
+from typing import Optional
 
-from sqlmodel import Session, select
+from supabase import Client
 
 from models import (
-    Transaction,
     TransactionCreate,
     TransactionPublic,
     TransactionType,
+    _generate_id,
 )
 
 
 def add_transaction(
-    session: Session,
+    supabase: Client,
     user_id: str,
     data: TransactionCreate,
 ) -> TransactionPublic:
     """Create a new transaction for a user."""
-    tx = Transaction(
-        user_id=user_id,
-        amount=data.amount,
-        description=data.description,
-        category=data.category,
-        transaction_type=data.transaction_type,
-        date=data.date or datetime.utcnow(),
-    )
-    session.add(tx)
-    session.commit()
-    session.refresh(tx)
-    return TransactionPublic.model_validate(tx)
+    row = {
+        "id": _generate_id(),
+        "user_id": user_id,
+        "amount": data.amount,
+        "description": data.description,
+        "category": data.category,
+        "transaction_type": data.transaction_type.value,
+        "date": (data.date or datetime.utcnow()).isoformat(),
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    result = supabase.table("transaction").insert(row).execute()
+    return TransactionPublic(**result.data[0])
 
 
 def delete_transaction(
-    session: Session,
+    supabase: Client,
     user_id: str,
     transaction_id: str,
 ) -> bool:
     """Delete a transaction owned by the user. Returns True if deleted."""
-    tx = session.exec(
-        select(Transaction).where(
-            Transaction.id == transaction_id,
-            Transaction.user_id == user_id,
-        )
-    ).first()
-    if not tx:
-        return False
-    session.delete(tx)
-    session.commit()
-    return True
+    result = (
+        supabase.table("transaction")
+        .delete()
+        .eq("id", transaction_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    return len(result.data) > 0
 
 
 def get_transactions(
-    session: Session,
+    supabase: Client,
     user_id: str,
     category: Optional[str] = None,
     transaction_type: Optional[TransactionType] = None,
@@ -62,17 +59,16 @@ def get_transactions(
     end_date: Optional[datetime] = None,
 ) -> list[TransactionPublic]:
     """Retrieve transactions for a user with optional filters."""
-    stmt = select(Transaction).where(Transaction.user_id == user_id)
+    query = supabase.table("transaction").select("*").eq("user_id", user_id)
 
     if category:
-        stmt = stmt.where(Transaction.category == category)
+        query = query.eq("category", category)
     if transaction_type:
-        stmt = stmt.where(Transaction.transaction_type == transaction_type)
+        query = query.eq("transaction_type", transaction_type.value)
     if start_date:
-        stmt = stmt.where(Transaction.date >= start_date)
+        query = query.gte("date", start_date.isoformat())
     if end_date:
-        stmt = stmt.where(Transaction.date <= end_date)
+        query = query.lte("date", end_date.isoformat())
 
-    stmt = stmt.order_by(Transaction.date.desc())  # type: ignore[union-attr]
-    rows = session.exec(stmt).all()
-    return [TransactionPublic.model_validate(r) for r in rows]
+    result = query.order("date", desc=True).execute()
+    return [TransactionPublic(**r) for r in result.data]

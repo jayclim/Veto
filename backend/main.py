@@ -1,19 +1,9 @@
-from contextlib import asynccontextmanager
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from database import init_db
 from routes import budgets, transactions, chat
 
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    init_db()
-    yield
-
-
-app = FastAPI(title="Veto Budget API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Veto Budget API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
