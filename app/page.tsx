@@ -311,7 +311,7 @@ export default function DashboardPage() {
                                             </td>
                                             <td className={`py-4 px-4 ${catStyle.color}`}>{tx.category}</td>
                                             <td className="py-4 px-4 text-slate-400">{fmtDate(tx.date)}</td>
-                                            <td className={`py-4 px-4 text-right font-mono font-medium ${isIncome ? 'text-emerald-accent' : 'text-white'}`}>
+                                            <td className={`py-4 px-4 text-right font-mono font-medium ${isIncome ? 'text-emerald-accent' : 'text-crimson-accent'}`}>
                                                 {isIncome ? '+' : '-'}{fmt(tx.amount)}
                                             </td>
                                             <td className="py-4 px-4 text-center">

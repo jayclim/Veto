@@ -269,7 +269,7 @@ export default function CardsPage() {
                                         <p className="text-slate-500 text-xs">{fmtDate(tx.date)} &middot; {tx.category}</p>
                                     </div>
                                 </div>
-                                <span className="text-white font-mono font-medium">-{fmt(tx.amount)}</span>
+                                <span className="text-crimson-accent font-mono font-medium">-{fmt(tx.amount)}</span>
                             </div>
                         ))}
                     </div>

@@ -56,6 +56,23 @@ class BudgetCategory(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class RuleType(str, Enum):
+    percentage_allocation = "percentage_allocation"  # e.g., 50/30/20
+    category_limit = "category_limit"               # max spend per category
+    savings_goal = "savings_goal"                   # save X per month
+    spending_alert = "spending_alert"               # alert when threshold hit
+
+
+class BudgetRule(SQLModel, table=True):
+    id: str = Field(default_factory=_generate_id, primary_key=True)
+    user_id: str = Field(foreign_key="user.id", index=True)
+    rule_type: RuleType
+    name: str  # e.g., "50/30/20 Rule", "Groceries Alert"
+    config: str  # JSON string with rule-specific configuration
+    is_active: bool = Field(default=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 # ── Public Models (Pydantic schemas for API) ──────────────────────
 
 
@@ -106,4 +123,19 @@ class DashboardSummary(CamelModel):
 class UserPublic(CamelModel):
     id: str
     username: str
+    created_at: datetime
+
+
+class BudgetRuleCreate(CamelModel):
+    rule_type: RuleType
+    name: str
+    config: str  # JSON string
+
+
+class BudgetRulePublic(CamelModel):
+    id: str
+    rule_type: RuleType
+    name: str
+    config: str
+    is_active: bool
     created_at: datetime
