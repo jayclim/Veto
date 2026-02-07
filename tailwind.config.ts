@@ -17,6 +17,7 @@ const config: Config = {
                 'slate-800': '#1e293b',
                 'emerald-accent': '#10b981',
                 'crimson-red': '#ff003c',
+                'crimson-accent': '#ff003c',
                 'surface-glass': 'rgba(30, 41, 59, 0.4)',
                 'surface-glass-hover': 'rgba(30, 41, 59, 0.6)',
             },

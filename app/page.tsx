@@ -212,6 +212,84 @@ export default function DashboardPage() {
                 </div>
             </div>
 
+            {/* Net Balance Trend */}
+            {transactions.length > 0 && (() => {
+                // Build daily running balance from transactions sorted by date
+                const sorted = [...transactions].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+                const dailyMap = new Map<string, number>();
+                for (const tx of sorted) {
+                    const day = tx.date.slice(0, 10);
+                    const prev = dailyMap.get(day) ?? 0;
+                    dailyMap.set(day, prev + (tx.transactionType === 'income' ? tx.amount : -tx.amount));
+                }
+                // Cumulative balance per day
+                const days = Array.from(dailyMap.keys()).sort();
+                const points: { day: string; balance: number }[] = [];
+                let running = 0;
+                for (const day of days) {
+                    running += dailyMap.get(day)!;
+                    points.push({ day, balance: running });
+                }
+                if (points.length < 2) return null;
+
+                const balances = points.map(p => p.balance);
+                const minVal = Math.min(...balances);
+                const maxVal = Math.max(...balances);
+                const range = maxVal - minVal || 1;
+                const W = 600;
+                const H = 200;
+                const padY = 20;
+
+                const toX = (i: number) => (i / (points.length - 1)) * W;
+                const toY = (v: number) => H - padY - ((v - minVal) / range) * (H - padY * 2);
+
+                const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${toX(i).toFixed(1)},${toY(p.balance).toFixed(1)}`).join(' ');
+                const areaPath = `${linePath} L${W},${H} L0,${H} Z`;
+                const zeroY = toY(0);
+                const showZero = minVal < 0 && maxVal > 0;
+
+                return (
+                    <div className="glass-panel rounded-2xl p-6 md:p-8">
+                        <h3 className="text-white font-medium mb-4">Net Balance Trend</h3>
+                        <div className="w-full overflow-hidden">
+                            <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" preserveAspectRatio="none">
+                                <defs>
+                                    <linearGradient id="balanceGrad" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="0%" stopColor={running >= 0 ? '#10b981' : '#ff003c'} stopOpacity="0.3" />
+                                        <stop offset="100%" stopColor={running >= 0 ? '#10b981' : '#ff003c'} stopOpacity="0.02" />
+                                    </linearGradient>
+                                </defs>
+                                {/* Grid lines */}
+                                {[0, 0.25, 0.5, 0.75, 1].map(pct => {
+                                    const y = padY + pct * (H - padY * 2);
+                                    return <line key={pct} x1="0" y1={y} x2={W} y2={y} stroke="rgba(148,163,184,0.08)" strokeWidth="1" />;
+                                })}
+                                {/* Zero line */}
+                                {showZero && (
+                                    <line x1="0" y1={zeroY} x2={W} y2={zeroY} stroke="rgba(148,163,184,0.25)" strokeWidth="1" strokeDasharray="6 4" />
+                                )}
+                                {/* Area fill */}
+                                <path d={areaPath} fill="url(#balanceGrad)" />
+                                {/* Line */}
+                                <path d={linePath} fill="none" stroke={running >= 0 ? '#10b981' : '#ff003c'} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
+                                {/* Data points */}
+                                {points.map((p, i) => (
+                                    <circle key={i} cx={toX(i)} cy={toY(p.balance)} r="4" fill={p.balance >= 0 ? '#10b981' : '#ff003c'} stroke="#0f172a" strokeWidth="2" />
+                                ))}
+                            </svg>
+                            {/* X-axis labels */}
+                            <div className="flex justify-between mt-2">
+                                {points.map((p, i) => (
+                                    <span key={i} className="text-[10px] text-slate-500 font-mono" style={{ width: 0, textAlign: 'center', overflow: 'visible', whiteSpace: 'nowrap' }}>
+                                        {new Date(p.day + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                                    </span>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
+
             {/* Add Transaction Form */}
             {showForm && (
                 <div className="glass-panel rounded-2xl p-6 md:p-8">
@@ -322,7 +400,7 @@ export default function DashboardPage() {
                                             </td>
                                             <td className={`py-4 px-4 ${catStyle.color}`}>{tx.category}</td>
                                             <td className="py-4 px-4 text-slate-400">{fmtDate(tx.date)}</td>
-                                            <td className={`py-4 px-4 text-right font-mono font-medium ${isIncome ? 'text-emerald-accent' : 'text-white'}`}>
+                                            <td className={`py-4 px-4 text-right font-mono font-medium ${isIncome ? 'text-emerald-accent' : 'text-crimson-accent'}`}>
                                                 {isIncome ? '+' : '-'}{fmt(tx.amount)}
                                             </td>
                                             <td className="py-4 px-4 text-center">
