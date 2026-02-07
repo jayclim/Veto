@@ -5,7 +5,10 @@
       "Bash(python3:*)",
       "Bash(npx next build:*)",
       "Bash(npx tsc:*)",
-      "Bash(npx tailwindcss:*)"
+      "Bash(npx tailwindcss:*)",
+      "Bash(grep:*)",
+      "Bash(git log:*)",
+      "Bash(xargs cat:*)"
     ]
   }
 }
