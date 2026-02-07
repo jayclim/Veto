@@ -49,6 +49,10 @@ CREATE TABLE IF NOT EXISTS budget_rule (
 
 CREATE INDEX IF NOT EXISTS idx_budget_rule_user_id ON budget_rule (user_id);
 
+-- ── View: veto_users (alias for "user" table) ──────────────────
+-- Some MCP server deployments reference "veto_users" instead of "user"
+CREATE OR REPLACE VIEW veto_users AS SELECT * FROM "user";
+
 -- ── Row Level Security (optional but recommended) ───────────────
 -- Enable RLS on all tables
 ALTER TABLE "user" ENABLE ROW LEVEL SECURITY;
